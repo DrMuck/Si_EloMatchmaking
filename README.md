@@ -137,7 +137,12 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 
 - Before the round, a Commander-button press sends `REQUEST_COMMANDER_LOTTERY_ENTRY` into the private
   `MP_Strategy.CommanderLottery` dictionary. `!commander` (Si_CommManagement) fills
-  `CommanderApplications.commanderApplicants`.
+  `CommanderApplications.commanderApplicants`. With Admin Mod 2.14.18 + Si_CommManagement 1.9.15
+  the Commander button itself is intercepted ("Denied early game commander join"): the player lands
+  in `commanderApplicants`, the vanilla dictionary stays empty, and one second before the start
+  CommManagement moves all applicants to role NONE. So that list is the real pool on current
+  servers. Note the namespace: the DLL is `Si_CommManagement.dll` but the types live in
+  `Si_CommanderManagement` (0.3.0 looked up the wrong name and saw no applicants; fixed in 0.3.1).
 - `OnMissionStateChanged(STARTED)` fires the "AI controlled" chat and `GameEvents.OnGameStarted`
   (Si_Logging's `Round_Start`), then Si_CommManagement's postfix runs its lottery, then in the same
   frame `UpdateGameLoop` calls the vanilla `ResolveCommanderLottery()`.
@@ -165,4 +170,6 @@ journal truncated. Load replays the journal (verified identical in a harness).
   player counts; mixing two movers is risky).
 - Mid-round commander takeovers are left to the game (whoever presses Commander gets the empty seat).
 - Not yet through a full live round. First live start 2026-10-20 on 1.0.2: reflection targets
-  resolved and a commander was seated; the default-branch build has not run yet.
+  resolved and a commander was seated. First start on the public 0.9.47 server the same evening
+  (Admin Mod 2.14.18, CommManagement 1.9.15): mod loaded, but 0.3.0 found no applicants because of
+  the namespace mix-up above; 0.3.1 fixes the lookup and logs the found type and version.

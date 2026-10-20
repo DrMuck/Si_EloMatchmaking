@@ -38,7 +38,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.3.0";
+        public const string Version = "0.3.1";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();

@@ -132,18 +132,26 @@ namespace Si_EloMatchmaking
         {
             if (_commLookedUp) return;
             _commLookedUp = true;
+            // The assembly is Si_CommManagement.dll but its namespace is Si_CommanderManagement
+            // (all databomb versions so far). Try the known names, then fall back to a scan by
+            // simple type name so a future rename does not silently drop the !commander pool.
+            string[] knownNames = { "Si_CommanderManagement.CommanderApplications", "Si_CommManagement.CommanderApplications" };
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
+                Type? t = null;
                 try
                 {
-                    var t = asm.GetType("Si_CommManagement.CommanderApplications");
-                    if (t == null) continue;
-                    _commApplicationsType = t;
-                    _commApplicantsField = t.GetField("commanderApplicants", BindingFlags.Public | BindingFlags.Static);
-                    MelonLogger.Msg($"[Elo] Si_CommManagement found; commanderApplicants={(_commApplicantsField != null)}");
-                    return;
+                    foreach (var n in knownNames) { t = asm.GetType(n); if (t != null) break; }
+                    if (t == null && (asm.GetName().Name ?? "").IndexOf("CommManagement", StringComparison.OrdinalIgnoreCase) >= 0)
+                        t = asm.GetTypes().FirstOrDefault(x => x.Name == "CommanderApplications");
                 }
                 catch { }
+                if (t == null) continue;
+                _commApplicationsType = t;
+                _commApplicantsField = t.GetField("commanderApplicants", BindingFlags.Public | BindingFlags.Static)
+                                    ?? t.GetField("commanderApplicants", BindingFlags.NonPublic | BindingFlags.Static);
+                MelonLogger.Msg($"[Elo] Si_CommManagement found ({t.FullName}, {asm.GetName().Version}); commanderApplicants={(_commApplicantsField != null)}");
+                return;
             }
             MelonLogger.Msg("[Elo] Si_CommManagement not loaded; only the in-game Commander button feeds the pool.");
         }
