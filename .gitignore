@@ -1,0 +1,14 @@
+# C# build artifacts
+Si_EloMatchmaking/bin/
+Si_EloMatchmaking/obj/
+
+# Game DLL references (not redistributable — copy from your Silica server install)
+include/
+
+# Python
+__pycache__/
+
+# IDE
+*.user
+.vs/
+.idea/

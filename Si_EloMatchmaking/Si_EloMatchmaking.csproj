@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <MSBuildWarningsAsMessages>MSB3270</MSBuildWarningsAsMessages>
+    <AssemblyName>Si_EloMatchmaking</AssemblyName>
+    <RootNamespace>Si_EloMatchmaking</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="..\include\netstandard2.1\*.dll">
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
