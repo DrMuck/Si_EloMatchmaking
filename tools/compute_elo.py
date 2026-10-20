@@ -127,7 +127,7 @@ def adv_for(adv, gametype, a, b):
 def new_entry(name):
     return {"name": name, "rating": START, "games": 0, "wins": 0, "losses": 0,
             "peak": START, "last_seen": None, "late_leaves": 0,
-            "factions": {t: {"games": 0, "wins": 0} for t in PLAYABLE}}
+            "factions": {t: {"games": 0, "wins": 0, "rating": START} for t in PLAYABLE}}
 
 
 def k_for(games):
@@ -154,24 +154,34 @@ def run(rounds, with_players=True):
                 w = sum(e["share"] for e in entries)
                 team_rating[team] = sum(cmd[e["steam"]]["rating"] * e["share"] for e in entries) / w
             deltas = defaultdict(float)
+            # per-faction ratings: same scheme, expectations from the faction ratings
+            team_rating_f = {}
+            for team, entries in ct.items():
+                w = sum(e["share"] for e in entries)
+                team_rating_f[team] = sum(cmd[e["steam"]]["factions"][team]["rating"] * e["share"] for e in entries) / w
+            deltas_f = defaultdict(float)
             for team, entries in ct.items():
                 if team == winner:
                     continue
                 ra, rb = team_rating[winner], team_rating[team]
                 ea = expected(ra, rb, adv_for(adv, r["gametype"], winner, team))
+                ea_f = expected(team_rating_f[winner], team_rating_f[team], adv_for(adv, r["gametype"], winner, team))
                 established = all(cmd[e["steam"]]["games"] >= PROVISIONAL_GAMES
                                   for e in ct[winner] + entries)
                 preds.append((ea, established, r["gametype"]))
                 for e in ct[winner]:
                     g = cmd[e["steam"]]["games"]
                     deltas[e["steam"]] += k_for(g) * e["share"] * (1.0 - ea) / (nteams - 1)
+                    deltas_f[e["steam"]] += k_for(g) * e["share"] * (1.0 - ea_f) / (nteams - 1)
                 for e in entries:
                     g = cmd[e["steam"]]["games"]
                     deltas[e["steam"]] += k_for(g) * e["share"] * (0.0 - (1.0 - ea)) / (nteams - 1)
+                    deltas_f[e["steam"]] += k_for(g) * e["share"] * (0.0 - (1.0 - ea_f)) / (nteams - 1)
             for team, entries in ct.items():
                 for e in entries:
                     c = cmd[e["steam"]]
                     c["rating"] += deltas[e["steam"]]
+                    c["factions"][team]["rating"] += deltas_f[e["steam"]]
                     c["games"] += 1
                     c["name"] = e["name"]
                     c["last_seen"] = r["end"]

@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace Si_EloMatchmaking
 {
@@ -25,6 +26,8 @@ namespace Si_EloMatchmaking
     {
         public int games;
         public int wins;
+        /// <summary>Per-faction Elo (same scheme as the overall rating, expectations from faction ratings). 0 in old files = start rating.</summary>
+        public double rating;
     }
 
     public class RatingEntry
@@ -41,9 +44,18 @@ namespace Si_EloMatchmaking
 
         public FactionStat Faction(string f)
         {
-            if (!factions.TryGetValue(f, out var s)) { s = new FactionStat(); factions[f] = s; }
+            if (!factions.TryGetValue(f, out var s)) { s = new FactionStat { rating = StartRatingForNew }; factions[f] = s; }
+            if (s.rating <= 0) s.rating = StartRatingForNew;
             return s;
         }
+
+        /// <summary>Create the three faction buckets so the dictionary never changes shape during a background save.</summary>
+        public void EnsureBuckets()
+        {
+            Faction("Sol"); Faction("Centauri"); Faction("Alien");
+        }
+        /// <summary>Set by RatingDb before use so FactionStat defaults match the config.</summary>
+        public static double StartRatingForNew = 1500;
     }
 
     public class RatingDbData
@@ -113,6 +125,15 @@ namespace Si_EloMatchmaking
         {
             _path = path;
             _cfg = cfg;
+            RatingEntry.StartRatingForNew = cfg.StartRating;
+        }
+
+        /// <summary>Per-faction commander rating (start rating when the commander never played that faction).</summary>
+        public double CommanderFactionRating(string steam, string faction)
+        {
+            var e = Commander(steam);
+            if (e == null) return _cfg.StartRating;
+            return e.Faction(faction).rating;
         }
 
         // ---- persistence --------------------------------------------------
@@ -133,8 +154,12 @@ namespace Si_EloMatchmaking
                 Data.players ??= new Dictionary<string, RatingEntry>();
                 Data.faction_adv ??= new Dictionary<string, double>();
                 Data.waiting ??= new Dictionary<string, int>();
+                int replayed = ReplayJournal();
+                if (replayed > 0) _journalSaves = FullSaveEvery;   // compact on the next save
+                foreach (var e in Data.commanders.Values) e.EnsureBuckets();
+                foreach (var e in Data.players.Values) e.EnsureBuckets();
                 MelonLogger.Msg($"[Elo] Loaded ratings: {Data.commanders.Count} commanders, {Data.players.Count} players, " +
-                                $"{Data.faction_adv.Count} faction terms, {Data.flex.Count} flex volunteers.");
+                                $"{Data.faction_adv.Count} faction terms, {Data.flex.Count} flex volunteers" + (replayed > 0 ? $", {replayed} journal entries replayed" : "") + ".");
                 return true;
             }
             catch (Exception ex)
@@ -145,20 +170,155 @@ namespace Si_EloMatchmaking
             }
         }
 
+        // ---- persistence: journal + periodic full rewrite -----------------------
+        // Save() appends one line with only the entries touched since the last save to
+        // ratings.journal.jsonl (plus the small flex/waiting sets); every FullSaveEvery-th save,
+        // on reset and on shutdown the whole file is rewritten and the journal truncated.
+        // Load() reads the full file and replays the journal. File work runs on a pool thread.
+        int _saveRunning;
+        bool _savePending;
+        int _journalSaves;
+        public int FullSaveEvery = 10;
+        readonly HashSet<string> _dirtyCommanders = new HashSet<string>();
+        readonly HashSet<string> _dirtyPlayers = new HashSet<string>();
+        readonly object _fileLock = new object();
+        string JournalPath => _path + ".journal.jsonl";
+
+        class Delta
+        {
+            public string? t;
+            public int rounds_live;
+            public Dictionary<string, RatingEntry> commanders = new Dictionary<string, RatingEntry>();
+            public Dictionary<string, RatingEntry> players = new Dictionary<string, RatingEntry>();
+            public HashSet<string> flex = new HashSet<string>();
+            public Dictionary<string, int> waiting = new Dictionary<string, int>();
+        }
+
         public void Save()
+        {
+            if (Interlocked.CompareExchange(ref _saveRunning, 1, 0) != 0) { _savePending = true; return; }
+            _savePending = false;
+            bool full = _journalSaves >= FullSaveEvery;
+            string path = _path, journal = JournalPath;
+            if (full)
+            {
+                _journalSaves = 0;
+                _dirtyCommanders.Clear(); _dirtyPlayers.Clear();
+                var snapshot = new RatingDbData
+                {
+                    schema = Data.schema,
+                    generated = Data.generated,
+                    source = Data.source,
+                    rounds_scored = Data.rounds_scored,
+                    parameters = Data.parameters,
+                    faction_adv = new Dictionary<string, double>(Data.faction_adv),
+                    validation = Data.validation,
+                    commanders = new Dictionary<string, RatingEntry>(Data.commanders),
+                    players = new Dictionary<string, RatingEntry>(Data.players),
+                    flex = new HashSet<string>(Data.flex),
+                    rounds_live = Data.rounds_live,
+                    waiting = new Dictionary<string, int>(Data.waiting),
+                    extra = Data.extra,
+                };
+                ThreadPool.QueueUserWorkItem(_ => RunSave(() => { lock (_fileLock) { WriteFull(path, snapshot); TruncateJournal(journal); } }));
+            }
+            else
+            {
+                _journalSaves++;
+                var delta = new Delta
+                {
+                    t = DateTime.UtcNow.ToString("o"),
+                    rounds_live = Data.rounds_live,
+                    flex = new HashSet<string>(Data.flex),
+                    waiting = new Dictionary<string, int>(Data.waiting),
+                };
+                foreach (var k in _dirtyCommanders) if (Data.commanders.TryGetValue(k, out var c)) delta.commanders[k] = c;
+                foreach (var k in _dirtyPlayers) if (Data.players.TryGetValue(k, out var p)) delta.players[k] = p;
+                _dirtyCommanders.Clear(); _dirtyPlayers.Clear();
+                ThreadPool.QueueUserWorkItem(_ => RunSave(() =>
+                {
+                    string line = JsonConvert.SerializeObject(delta, Formatting.None);
+                    lock (_fileLock) File.AppendAllText(journal, line + "\n");
+                }));
+            }
+        }
+
+        void RunSave(Action work)
+        {
+            try { work(); }
+            catch (Exception ex) { MelonLogger.Error("[Elo] Background save failed: " + ex.Message); }
+            finally
+            {
+                Interlocked.Exchange(ref _saveRunning, 0);
+                if (_savePending) { _savePending = false; Save(); }
+            }
+        }
+
+        /// <summary>Synchronous full save (reset, shutdown).</summary>
+        public void SaveNow()
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-                string tmp = _path + ".tmp";
-                File.WriteAllText(tmp, JsonConvert.SerializeObject(Data, Formatting.Indented));
-                if (File.Exists(_path)) File.Replace(tmp, _path, _path + ".bak");
-                else File.Move(tmp, _path);
+                int spins = 0;
+                while (Volatile.Read(ref _saveRunning) != 0 && spins++ < 300) Thread.Sleep(10);
+                lock (_fileLock) { WriteFull(_path, Data); TruncateJournal(JournalPath); }
+                _dirtyCommanders.Clear(); _dirtyPlayers.Clear();
+                _journalSaves = 0;
             }
-            catch (Exception ex)
+            catch (Exception ex) { MelonLogger.Error("[Elo] Failed to save ratings: " + ex.Message); }
+        }
+
+        static void WriteFull(string path, RatingDbData data)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp, JsonConvert.SerializeObject(data, Formatting.None));
+            if (File.Exists(path)) File.Replace(tmp, path, path + ".bak");
+            else File.Move(tmp, path);
+        }
+
+        static void TruncateJournal(string journal)
+        {
+            try { if (File.Exists(journal)) File.Delete(journal); } catch { }
+        }
+
+        int ReplayJournal()
+        {
+            string journal = JournalPath;
+            if (!File.Exists(journal)) return 0;
+            int n = 0;
+            try
             {
-                MelonLogger.Error("[Elo] Failed to save ratings: " + ex.Message);
+                foreach (var line in File.ReadLines(journal))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    Delta? d = null;
+                    try { d = JsonConvert.DeserializeObject<Delta>(line); } catch { continue; }
+                    if (d == null) continue;
+                    foreach (var kv in d.commanders) Data.commanders[kv.Key] = kv.Value;
+                    foreach (var kv in d.players) Data.players[kv.Key] = kv.Value;
+                    if (d.flex != null) Data.flex = d.flex;
+                    if (d.waiting != null) Data.waiting = d.waiting;
+                    if (d.rounds_live > Data.rounds_live) Data.rounds_live = d.rounds_live;
+                    n++;
+                }
             }
+            catch (Exception ex) { MelonLogger.Warning("[Elo] Journal replay: " + ex.Message); }
+            return n;
+        }
+
+        /// <summary>New season: back up the current file, wipe ratings and counters, keep flex preferences. Returns the backup path.</summary>
+        public string ResetSeason()
+        {
+            string backup = Path.Combine(Path.GetDirectoryName(_path)!, $"ratings_backup_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json");
+            try { if (File.Exists(_path)) File.Copy(_path, backup, true); }
+            catch (Exception ex) { MelonLogger.Error("[Elo] Backup before reset failed: " + ex.Message); }
+            var keepFlex = Data.flex;
+            var keepAdv = Data.faction_adv;
+            Data = new RatingDbData { flex = keepFlex, faction_adv = keepAdv, generated = DateTime.UtcNow.ToString("o"), source = "season reset" };
+            SaveNow();
+            MelonLogger.Msg("[Elo] Season reset; backup at " + backup);
+            return backup;
         }
 
         // ---- lookups --------------------------------------------------------
@@ -170,8 +330,10 @@ namespace Si_EloMatchmaking
             if (!Data.commanders.TryGetValue(steam, out var e))
             {
                 e = new RatingEntry { name = name, rating = _cfg.StartRating, peak = _cfg.StartRating };
+                e.EnsureBuckets();
                 Data.commanders[steam] = e;
             }
+            _dirtyCommanders.Add(steam);
             return e;
         }
 
@@ -180,8 +342,10 @@ namespace Si_EloMatchmaking
             if (!Data.players.TryGetValue(steam, out var e))
             {
                 e = new RatingEntry { name = name, rating = _cfg.StartRating, peak = _cfg.StartRating };
+                e.EnsureBuckets();
                 Data.players[steam] = e;
             }
+            _dirtyPlayers.Add(steam);
             return e;
         }
 
@@ -310,22 +474,36 @@ namespace Si_EloMatchmaking
                     foreach (var e in kv.Value) GetOrCreateCommander(e.steam, e.name);
 
                 var teamRating = new Dictionary<string, double>();
+                var teamRatingF = new Dictionary<string, double>();
                 foreach (var kv in commanded)
                 {
                     double w = kv.Value.Sum(e => e.share);
                     teamRating[kv.Key] = kv.Value.Sum(e => Data.commanders[e.steam].rating * e.share) / w;
+                    teamRatingF[kv.Key] = kv.Value.Sum(e => Data.commanders[e.steam].Faction(kv.Key).rating * e.share) / w;
                 }
                 var delta = new Dictionary<string, double>();
+                var deltaF = new Dictionary<string, double>();
                 void Add(string s, double d) { delta[s] = (delta.TryGetValue(s, out var x) ? x : 0) + d; }
+                void AddF(string s, double d) { deltaF[s] = (deltaF.TryGetValue(s, out var x) ? x : 0) + d; }
 
                 foreach (var kv in commanded)
                 {
                     if (kv.Key == r.winner) continue;
-                    double ea = Expected(teamRating[r.winner], teamRating[kv.Key], AdvFor(r.gametype, r.winner, kv.Key));
+                    double adv = AdvFor(r.gametype, r.winner, kv.Key);
+                    double ea = Expected(teamRating[r.winner], teamRating[kv.Key], adv);
+                    double eaF = Expected(teamRatingF[r.winner], teamRatingF[kv.Key], adv);
                     foreach (var e in commanded[r.winner])
-                        Add(e.steam, KFor(Data.commanders[e.steam].games) * e.share * (1.0 - ea) / (nTeams - 1));
+                    {
+                        double k = KFor(Data.commanders[e.steam].games);
+                        Add(e.steam, k * e.share * (1.0 - ea) / (nTeams - 1));
+                        AddF(e.steam, k * e.share * (1.0 - eaF) / (nTeams - 1));
+                    }
                     foreach (var e in kv.Value)
-                        Add(e.steam, KFor(Data.commanders[e.steam].games) * e.share * (0.0 - (1.0 - ea)) / (nTeams - 1));
+                    {
+                        double k = KFor(Data.commanders[e.steam].games);
+                        Add(e.steam, k * e.share * (0.0 - (1.0 - ea)) / (nTeams - 1));
+                        AddF(e.steam, k * e.share * (0.0 - (1.0 - eaF)) / (nTeams - 1));
+                    }
                 }
                 foreach (var kv in commanded)
                 {
@@ -338,8 +516,10 @@ namespace Si_EloMatchmaking
                         c.name = e.name;
                         c.last_seen = stamp;
                         c.peak = Math.Max(c.peak, c.rating);
-                        c.Faction(kv.Key).games++;
-                        if (kv.Key == r.winner) { c.wins++; c.Faction(kv.Key).wins++; } else c.losses++;
+                        var fs = c.Faction(kv.Key);
+                        fs.rating += deltaF.TryGetValue(e.steam, out var df) ? df : 0;
+                        fs.games++;
+                        if (kv.Key == r.winner) { c.wins++; fs.wins++; } else c.losses++;
                         if (e.late) c.late_leaves++;
                         changes.Add(new RatingChange { steam = e.steam, name = e.name, faction = kv.Key, before = before, after = c.rating, share = e.share, lateLeave = e.late });
                     }

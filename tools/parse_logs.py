@@ -40,16 +40,28 @@ import sys
 from datetime import datetime
 
 LINE_RE = re.compile(r'^L (\d\d)/(\d\d)/(\d{4}) - (\d\d):(\d\d):(\d\d): (.*)$')
-PLAYER_RE = re.compile(r'^"(?P<name>.*)<(?P<slot>-?\d+)><(?P<steam>[^<>]*)><(?P<team>[^<>]*)>" (?P<rest>.*)$')
+# name is non-greedy: kill lines carry a second <slot><steam><team> group for the victim
+PLAYER_RE = re.compile(r'^"(?P<name>(?:(?!" ).)*?)<(?P<slot>-?\d+)><(?P<steam>[^<>]*)><(?P<team>[^<>]*)>" (?P<rest>.*)$')
 WORLD_RE = re.compile(r'^World triggered "(?P<ev>[^"]+)"(?P<args>.*)$')
 TEAM_TRIG_RE = re.compile(r'^Team "(?P<team>[^"]+)" triggered "(?P<ev>[^"]+)"(?P<args>.*)$')
 TEAM_SCORE_RE = re.compile(r'^Team "(?P<team>[^"]+)" scored "(?P<score>-?\d+)" with "(?P<n>\d+)" players')
+AI_ATTACKER_RE = re.compile(r'^"(?P<aname>(?:(?!" ).)*?)<><><(?P<ateam>[^<>]*)>" (?P<rest>.*)$')
+KILL_RE = re.compile(r'^killed "(?P<vname>.*)<(?P<vslot>-?\d*)><(?P<vsteam>[^<>]*)><(?P<vteam>[^<>]*)>" with "(?P<weapon>[^"]*)"(?P<args>.*)$')
 PLAYER_SCORE_RE = re.compile(r'^Player "(?P<name>.*)<(?P<slot>-?\d+)><(?P<steam>[^<>]*)><(?P<team>[^<>]*)>" scored "(?P<score>-?\d+)" \(kills "(?P<kills>\d+)"\) \(deaths "(?P<deaths>\d+)"\)')
 ARG_RE = re.compile(r'\((\w+) "([^"]*)"\)')
 LOADMAP_RE = re.compile(r'^Loading map "(?P<map>[^"]+)"')
 LOGSTART_RE = re.compile(r'^Log file started .*\(version "(?P<ver>[^"]+)"\)')
 
 PLAYABLE_TEAMS = ("Sol", "Centauri", "Alien")
+# victim names that are buildings (HL "killed" lines use the same format for structures)
+STRUCTURE_NAMES = {
+    "Headquarters", "Barracks", "Refinery", "LightFactory", "HeavyFactory", "AirFactory", "Outpost",
+    "FusionReactor", "FusionReactor_01", "ResearchFacility", "RepairFacility", "Silo", "RadarStation",
+    "CommandPost", "DefenseTurret", "AntiAirTurret", "AntiAirRocketTurret", "MachineGunTurret",
+    "RocketTurret", "ArtilleryTurret", "ShieldGenerator", "Wall", "Gate", "Bunker",
+    "Nest", "Node", "BioCache", "QuantumCortex", "LesserSpawningCyst", "GreaterSpawningCyst",
+    "GrandSpawningCyst", "ColossalSpawningCyst", "HiveSpire", "ThornSpire", "Spire", "ShockSpire",
+}
 
 
 def parse_ts(m):
@@ -79,6 +91,8 @@ class Round:
         self.abort_reason = None
         self.scores = {}          # team -> (score, players_end)
         self.player_scores = {}   # steam -> dict
+        self.combat = {}          # steam -> {kills_h, kills_ai, deaths_h, deaths_ai, structure_kills}
+        self.duels = []           # [attacker_steam, attacker_team, victim_steam, victim_team] in log order
         self.tenures = []         # dict(team, steam, name, start, end, end_reason)
         self.presence = []        # dict(team, steam, name, start, end)
         self.open_cmd = {}        # team -> open tenure dict
@@ -109,6 +123,13 @@ class Round:
         self.end = ts
         for team in list(self.open_cmd):
             self.end_cmd(team, ts, "round_end")
+
+    def combat_of(self, steam):
+        c = self.combat.get(steam)
+        if c is None:
+            c = {"kills_h": 0, "kills_ai": 0, "deaths_h": 0, "deaths_ai": 0, "structure_kills": 0}
+            self.combat[steam] = c
+        return c
 
     # --- serialisation ----------------------------------------------------
     def to_record(self):
@@ -155,6 +176,9 @@ class Round:
                     q["score"] = ps["score"]
                     q["kills"] = ps["kills"]
                     q["deaths"] = ps["deaths"]
+                cb = self.combat.get(steam)
+                if cb:
+                    q.update(cb)
             teams[team] = {"score": score, "players_end": n_end, "commanders": cmds, "players": players}
         return {
             "id": self.id,
@@ -169,6 +193,7 @@ class Round:
             "aborted": self.aborted,
             "abort_reason": self.abort_reason,
             "teams": teams,
+            "duels": self.duels,
         }
 
 
@@ -258,9 +283,23 @@ class LogParser:
         if rest.startswith('"'):
             pm = PLAYER_RE.match(rest)
             if not pm:
+                # AI attacker ("Crab<><><Alien>" killed "...") -> count the human victim's death
+                am = AI_ATTACKER_RE.match(rest)
+                if am and self.cur is not None:
+                    km = KILL_RE.match(am.group("rest"))
+                    if km and km.group("vsteam").isdigit():
+                        args = dict(ARG_RE.findall(km.group("args")))
+                        if args.get("victim", km.group("vname")) not in STRUCTURE_NAMES:
+                            self.cur.combat_of(km.group("vsteam"))["deaths_ai"] += 1
                 return
             steam = pm.group("steam")
             if not steam or not steam.isdigit():
+                # AI attacker: only the human victim's death counts
+                km = KILL_RE.match(pm.group("rest"))
+                if km and self.cur is not None and km.group("vsteam").isdigit():
+                    args = dict(ARG_RE.findall(km.group("args")))
+                    if args.get("victim", km.group("vname")) not in STRUCTURE_NAMES:
+                        self.cur.combat_of(km.group("vsteam"))["deaths_ai"] += 1
                 return
             name = pm.group("name")
             team = pm.group("team")
@@ -281,6 +320,26 @@ class LogParser:
                         cur = self.cur.open_cmd.get(team)
                         if cur is not None and cur["steam"] == steam:
                             self.cur.end_cmd(team, ts, "role_" + role.lower())
+            elif action.startswith("killed "):
+                km = KILL_RE.match(action)
+                if km and self.cur is not None:
+                    vsteam = km.group("vsteam")
+                    victim_human = vsteam.isdigit()
+                    args = dict(ARG_RE.findall(km.group("args")))
+                    vunit = args.get("victim", km.group("vname"))
+                    is_structure = vunit in STRUCTURE_NAMES
+                    if team in PLAYABLE_TEAMS and km.group("vteam") != team:
+                        c = self.cur.combat_of(steam)
+                        if is_structure:
+                            c["structure_kills"] += 1
+                        elif victim_human:
+                            c["kills_h"] += 1
+                            if vsteam != steam:
+                                self.cur.duels.append([steam, team, vsteam, km.group("vteam")])
+                        else:
+                            c["kills_ai"] += 1
+                    if victim_human and not is_structure:
+                        self.cur.combat_of(vsteam)["deaths_h"] += 1
             elif action == "disconnected":
                 self.disconnect(steam, ts)
             elif action == "entered the game":

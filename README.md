@@ -117,6 +117,7 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo status` | all | applicant pool and projected matchup during the countdown |
 | `!elo on` / `off` | admin (Commander power) | master switch; off = vanilla lottery, ratings still tracked |
 | `!elo reload` | admin | reload ratings.json |
+| `!elo reset confirm` | admin | new season: back up and wipe all ratings (for the 1.0 launch) |
 | `!elo set <name> <rating>` | admin | override a commander rating |
 | `!elo swap on/off`, `!elo volunteers on/off`, `!elo spread <w>` | admin | tune the objective |
 
@@ -134,6 +135,17 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
   reflection, and fires AdminMod's `OnRoleChanged` so Si_Logging writes `changed role to "Commander"`.
 - Tenure tracking polls `GetCommanderForTeam` every 2 s; the rating update runs in a postfix on
   `MusicJukeboxHandler.OnGameEnded(GameMode, Team)`.
+
+## Cost on the server
+
+Measured with the 1318-commander / 3672-player seed (.NET 8 dev box; Mono will be somewhat slower):
+round-end rating update 0.07 ms; the pick at round start enumerates at most a few thousand
+assignments (microseconds); the 2-second in-round poll touches each connected player once; the
+per-frame OnUpdate is a handful of property reads. Saving is diff-based and off the main thread:
+a save appends one line with the entries touched since the last save to
+`ratings.json.journal.jsonl` (main-thread cost 0.03 ms, ~12 KB per round on a pool thread); every
+tenth save, on reset and on shutdown the full file is rewritten (~40 ms on the pool thread) and the
+journal truncated. Load replays the journal (verified identical in a harness).
 
 ## Known limits / not done
 

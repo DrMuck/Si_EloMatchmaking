@@ -11,6 +11,7 @@
    admin (Power.Commander):
    !elo on | off             matchmaking master switch
    !elo reload               reload ratings.json (after replacing it with a new seed)
+   !elo reset confirm        new season: back up ratings.json and start everyone at the start rating (flex flags kept)
    !elo set <name|steamid> <rating>
    !elo swap on|off          Sol<->Centauri applicant moves
    !elo volunteers on|off    !flex volunteers for seats without applicants
@@ -87,7 +88,7 @@ namespace Si_EloMatchmaking
                     return;
             }
 
-            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread")
+            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "reset")
             {
                 if (!IsAdmin(caller)) { GameApi.Say(caller, "Admin only."); return; }
                 switch (sub)
@@ -99,6 +100,17 @@ namespace Si_EloMatchmaking
                     case "off":
                         Cfg.Enabled = false; ConfigStore.Save(Cfg);
                         GameApi.SayAll("Elo matchmaking OFF: the normal commander lottery is back (ratings are still tracked).");
+                        return;
+                    case "reset":
+                        if (!rest.StartsWith("confirm", StringComparison.OrdinalIgnoreCase))
+                        {
+                            GameApi.Say(caller, $"This wipes all ratings ({Db.Data.commanders.Count} commanders, {Db.Data.players.Count} players) after backing up the file. Type: !elo reset confirm");
+                            return;
+                        }
+                        {
+                            string backup = Db.ResetSeason();
+                            GameApi.SayAll($"Season reset: all commander and player ratings start again at {Cfg.StartRating:0}. Backup: {System.IO.Path.GetFileName(backup)}");
+                        }
                         return;
                     case "reload":
                         Db.Load();

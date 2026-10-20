@@ -1,13 +1,13 @@
 # Silica commander Elo - log-derived seed
 
-Rounds scored: 3647. Commanders rated: 1318 (120 with >= 10 games). Players rated: 3675.
+Rounds scored: 3647. Commanders rated: 1317 (120 with >= 10 games). Players rated: 3672.
 
 ## Validation (pre-round expectation of the eventual winner)
 
 | set | n | log-loss | coin-flip log-loss | winner was favourite |
 |---|---|---|---|---|
-| all | 3730 | 0.5462 | 0.6931 | 0.731 |
-| established | 837 | 0.5748 | 0.6931 | 0.708 |
+| all | 3729 | 0.5463 | 0.6931 | 0.73 |
+| established | 838 | 0.5751 | 0.6931 | 0.708 |
 
 ## Faction advantage used (Elo points, A over B)
 
@@ -17,7 +17,7 @@ Rounds scored: 3647. Commanders rated: 1318 (120 with >= 10 games). Players rate
 | HUMANS_VS_ALIENS | Alien | Sol | 494 | 0.522 | +13.8 |
 | HUMANS_VS_HUMANS | Centauri | Sol | 686 | 0.547 | +29.9 |
 | HUMANS_VS_HUMANS_VS_ALIENS | Alien | Centauri | 758 | 0.530 | +19.6 |
-| HUMANS_VS_HUMANS_VS_ALIENS | Alien | Sol | 706 | 0.576 | +49.3 |
+| HUMANS_VS_HUMANS_VS_ALIENS | Alien | Sol | 705 | 0.576 | +48.9 |
 | HUMANS_VS_HUMANS_VS_ALIENS | Centauri | Sol | 706 | 0.530 | +19.1 |
 
 ## Top commanders (>= 10 games)
@@ -25,7 +25,7 @@ Rounds scored: 3647. Commanders rated: 1318 (120 with >= 10 games). Players rate
 | # | commander | rating | games | W-L | Sol | Cent | Alien | late leaves | last seen |
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | game8breaker | 1899 | 165 | 137-28 | 93/110 | 19/29 | 25/26 | 6 | 2026-08-07 |
-| 2 | Coffee | 1898 | 155 | 120-35 | 74/95 | 36/45 | 10/15 | 7 | 2026-07-26 |
+| 2 | Coffee | 1897 | 155 | 120-35 | 74/95 | 36/45 | 10/15 | 7 | 2026-07-26 |
 | 3 | Lucker | 1891 | 122 | 97-25 | 37/47 | 53/67 | 7/8 | 1 | 2026-08-07 |
 | 4 | ❄Fresh❄ | 1833 | 149 | 114-35 | 31/39 | 38/49 | 45/61 | 7 | 2026-07-29 |
 | 5 | Max666 | 1822 | 161 | 110-51 | 26/37 | 58/84 | 26/40 | 14 | 2026-08-06 |
@@ -38,8 +38,8 @@ Rounds scored: 3647. Commanders rated: 1318 (120 with >= 10 games). Players rate
 | 12 | Dat Dolly | 1737 | 47 | 37-10 | 4/6 | 11/14 | 22/27 | 4 | 2026-06-30 |
 | 13 | Davey | 1737 | 75 | 47-28 | 12/21 | 20/27 | 15/27 | 8 | 2026-08-08 |
 | 14 | alex83 | 1736 | 95 | 61-34 | 4/9 | 55/81 | 2/5 | 4 | 2026-07-12 |
-| 15 | Chicken Feet | 1724 | 37 | 23-14 | 10/16 | 5/11 | 8/10 | 2 | 2026-07-26 |
-| 16 | Zero | 1721 | 43 | 26-17 | 4/9 | 6/9 | 16/25 | 7 | 2026-07-25 |
+| 15 | Chicken Feet | 1725 | 37 | 23-14 | 10/16 | 5/11 | 8/10 | 2 | 2026-07-26 |
+| 16 | Zero | 1722 | 43 | 26-17 | 4/9 | 6/9 | 16/25 | 7 | 2026-07-25 |
 | 17 | Eagle HawK | 1721 | 81 | 43-38 | 5/15 | 3/7 | 35/59 | 9 | 2026-07-26 |
 | 18 | Col. Jack O'Neill | 1720 | 50 | 37-13 | 16/22 | 3/7 | 18/21 | 4 | 2026-02-19 |
 | 19 | SavageHoney | 1718 | 42 | 29-13 | 10/16 | 16/23 | 3/3 | 1 | 2026-07-20 |
@@ -47,7 +47,7 @@ Rounds scored: 3647. Commanders rated: 1318 (120 with >= 10 games). Players rate
 | 21 | Davisox | 1707 | 72 | 46-26 | 21/29 | 23/35 | 2/8 | 10 | 2026-08-02 |
 | 22 | Enigma | 1705 | 65 | 46-19 | 11/12 | 11/17 | 24/36 | 9 | 2026-08-06 |
 | 23 | Fluffy Bandit | 1686 | 41 | 24-17 | 13/24 | 9/11 | 2/6 | 3 | 2026-08-07 |
-| 24 | monya | 1667 | 18 | 11-7 | 1/3 | 8/13 | 2/2 | 3 | 2026-06-09 |
+| 24 | monya | 1668 | 18 | 11-7 | 1/3 | 8/13 | 2/2 | 3 | 2026-06-09 |
 | 25 | Harkle | 1664 | 129 | 69-60 | 26/44 | 23/51 | 20/34 | 9 | 2026-07-19 |
 | 26 | TheKnecht | 1663 | 73 | 38-35 | 15/25 | 8/20 | 15/28 | 4 | 2026-07-27 |
 | 27 | Beeman | 1657 | 46 | 23-23 | 6/13 | 13/22 | 4/11 | 9 | 2026-07-06 |
@@ -65,15 +65,15 @@ Rounds scored: 3647. Commanders rated: 1318 (120 with >= 10 games). Players rate
 | 39 | Killerbee77 | 1599 | 31 | 16-15 | 4/7 | 9/17 | 3/7 | 1 | 2026-06-01 |
 | 40 | araserberk | 1598 | 16 | 8-8 | 1/5 | 4/7 | 3/4 | 1 | 2026-07-19 |
 | 41 | HeavySmoke333 | 1596 | 24 | 15-9 | 9/15 | 4/6 | 2/3 | 3 | 2026-06-13 |
-| 42 | Omnitrix01 | 1595 | 33 | 18-15 | 5/12 | 13/21 | 0/0 | 5 | 2026-02-08 |
-| 43 | ThePotatoMaster | 1595 | 17 | 8-9 | 0/2 | 2/6 | 6/9 | 2 | 2026-06-13 |
-| 44 | Drk_metalESP | 1593 | 52 | 24-28 | 8/15 | 9/21 | 7/16 | 2 | 2026-08-03 |
+| 42 | ThePotatoMaster | 1595 | 17 | 8-9 | 0/2 | 2/6 | 6/9 | 2 | 2026-06-13 |
+| 43 | Omnitrix01 | 1595 | 33 | 18-15 | 5/12 | 13/21 | 0/0 | 5 | 2026-02-08 |
+| 44 | Drk_metalESP | 1595 | 52 | 24-28 | 8/15 | 9/21 | 7/16 | 2 | 2026-08-03 |
 | 45 | AlexGames[RUS] | 1591 | 12 | 6-6 | 1/1 | 1/1 | 4/10 | 0 | 2026-08-02 |
 | 46 | Scrin | 1587 | 11 | 5-6 | 0/0 | 0/1 | 5/10 | 3 | 2026-08-02 |
 | 47 | ThePunisher | 1585 | 21 | 8-13 | 7/18 | 0/0 | 1/3 | 2 | 2026-07-17 |
 | 48 | Snag Ironballs | 1585 | 38 | 17-21 | 7/15 | 7/9 | 3/14 | 1 | 2026-07-18 |
-| 49 | terrabonk | 1582 | 36 | 15-21 | 5/17 | 10/18 | 0/1 | 4 | 2026-07-23 |
-| 50 | nuclearballs | 1582 | 28 | 12-16 | 2/6 | 0/1 | 10/21 | 4 | 2026-08-03 |
+| 49 | nuclearballs | 1582 | 28 | 12-16 | 2/6 | 0/1 | 10/21 | 4 | 2026-08-03 |
+| 50 | terrabonk | 1582 | 36 | 15-21 | 5/17 | 10/18 | 0/1 | 4 | 2026-07-23 |
 | 51 | Getriebesand | 1579 | 20 | 11-9 | 1/4 | 1/1 | 9/15 | 0 | 2026-04-05 |
 | 52 | zerodawn | 1578 | 110 | 48-62 | 26/62 | 13/31 | 9/17 | 8 | 2026-05-28 |
 | 53 | Not a Weatherman | 1577 | 45 | 15-30 | 1/18 | 8/16 | 6/11 | 5 | 2026-06-03 |
@@ -87,4 +87,4 @@ Rounds scored: 3647. Commanders rated: 1318 (120 with >= 10 games). Players rate
 
 ## Rating distribution (commanders with >= 10 games)
 
-min 1365 | p10 1428 | p25 1476 | median 1562 | p75 1648 | p90 1737 | max 1899
+min 1365 | p10 1428 | p25 1477 | median 1562 | p75 1648 | p90 1737 | max 1899
