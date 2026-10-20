@@ -3,7 +3,8 @@
  server) and over Si_CommManagement, so the mod has no compile-time dependency
  on private members or on CommManagement being installed.
 
- Verified against the 1.0.2 decompile (C:\tmp\silica_decompile_102\MP_Strategy.cs):
+ Verified against the 0.9.47 decompile (default branch; SetCommander/RPC_* are private there,
+ lines 1511/963/935) and the 1.0.2 decompile (C:\tmp\silica_decompile_102\MP_Strategy.cs):
    private Dictionary<Team, List<Player>> CommanderLottery          (line 155)
    protected void SetCommander(Team team, Player player)              (line ~1553)
    protected void RPC_SynchCommander(Team team, bool kicked = false)  (line 949)

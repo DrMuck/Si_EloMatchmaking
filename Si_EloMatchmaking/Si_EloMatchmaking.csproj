@@ -6,9 +6,16 @@
     <MSBuildWarningsAsMessages>MSB3270</MSBuildWarningsAsMessages>
     <AssemblyName>Si_EloMatchmaking</AssemblyName>
     <RootNamespace>Si_EloMatchmaking</RootNamespace>
+    <!-- Which Silica branch to build against: "default" (Steam default branch) or "test".
+         Reference DLLs live in ..\include\<branch>\ (copied from that branch's server install).
+         Override with: dotnet build -c Release -p:SilicaBranch=test -->
+    <SilicaBranch Condition="'$(SilicaBranch)' == ''">default</SilicaBranch>
+    <OutputPath>bin\$(Configuration)\$(SilicaBranch)\</OutputPath>
+    <IntermediateOutputPath>obj\$(Configuration)\$(SilicaBranch)\</IntermediateOutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="..\include\netstandard2.1\*.dll">
+    <Reference Include="..\include\$(SilicaBranch)\*.dll">
       <Private>False</Private>
     </Reference>
   </ItemGroup>

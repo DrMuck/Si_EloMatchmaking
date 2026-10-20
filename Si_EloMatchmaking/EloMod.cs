@@ -12,7 +12,7 @@
  - Leaver rule: a commander who drops out in the last 10 minutes of a lost round still takes
    the loss.
 
- How it hooks the game (1.0.2, Mono server)
+ How it hooks the game (0.9.47 and 1.0.2, Mono server)
  - Postfix on MP_Strategy.OnMissionStateChanged(STARTED) with Priority.High: runs before
    Si_CommManagement's own lottery postfix and before the vanilla ResolveCommanderLottery()
    (same frame, later). It consumes both applicant lists, so neither random pick seats anyone.

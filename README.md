@@ -1,6 +1,10 @@
 # Si_EloMatchmaking
 
-Elo-based commander matchmaking for Silica dedicated servers (MelonLoader, Mono server build 1.0.2).
+Elo-based commander matchmaking for Silica dedicated servers (MelonLoader, Mono server).
+
+Supported game versions: the Steam **default** branch (0.9.47) and the **test** branch (1.0.2).
+The source is the same for both; only the reference DLLs differ. Git branch `master` is built
+against the default branch, git branch `test` against the test branch (see Build and deploy).
 
 ## What it does
 
@@ -88,13 +92,21 @@ UserData\cfg\EloMatchmaking\Si_EloMatchmaking_Config.json (created on first run)
 
 ```
 cd Si_EloMatchmaking
-dotnet build -c Release
-copy bin\Release\netstandard2.1\Si_EloMatchmaking.dll "<server>\Mods\"
+dotnet build -c Release                          (Steam default branch -> bin\Release\default\)
+dotnet build -c Release -p:SilicaBranch=test     (Steam test branch    -> bin\Release\test\)
+copy bin\Release\default\Si_EloMatchmaking.dll "<server>\Mods\"
 ```
 
-`include/netstandard2.1` holds SilicaCore.dll (from the server's Silica_Data\Managed), MelonLoader
-net6 `MelonLoader.dll` + `0Harmony.dll`, `Newtonsoft.Json.dll`, `Si_AdminMod.dll` and the Unity
-modules. Refresh SilicaCore.dll after a game update.
+`include/default` and `include/test` hold the reference DLLs of the respective Silica branch:
+SilicaCore.dll and the Unity modules (from that server's Silica_Data\Managed), MelonLoader net6
+`MelonLoader.dll` + `0Harmony.dll`, `Newtonsoft.Json.dll`, `Si_AdminMod.dll`. Refresh after a game
+update. `SilicaBranch` defaults to `default` on git `master` and to `test` on git `test`.
+
+Both builds were checked with a Mono.Cecil reference check against both game versions on
+2026-10-20: every SilicaCore member the mod uses (public API plus the reflected
+`CommanderLottery`, `SetCommander`, `RPC_SynchCommander`, `RPC_SynchRole`) exists in 0.9.47 and
+1.0.2; the only difference is that the seating methods are `private` in 0.9.47 and `protected` in
+1.0.2, which reflection does not care about.
 
 ## Rebuilding the seed from logs
 
@@ -121,7 +133,7 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo set <name> <rating>` | admin | override a commander rating |
 | `!elo swap on/off`, `!elo volunteers on/off`, `!elo spread <w>` | admin | tune the objective |
 
-## How the pick is wired into the game (1.0.2)
+## How the pick is wired into the game (0.9.47 and 1.0.2, same flow)
 
 - Before the round, a Commander-button press sends `REQUEST_COMMANDER_LOTTERY_ENTRY` into the private
   `MP_Strategy.CommanderLottery` dictionary. `!commander` (Si_CommManagement) fills
@@ -152,4 +164,5 @@ journal truncated. Load replays the journal (verified identical in a harness).
 - Player Elo is **report only**; nobody is moved for player balance (Si_BasicTeamBalance handles
   player counts; mixing two movers is risky).
 - Mid-round commander takeovers are left to the game (whoever presses Commander gets the empty seat).
-- Not yet tested in a live round (deployed 2026-10-19 to the local server while it was stopped).
+- Not yet through a full live round. First live start 2026-10-20 on 1.0.2: reflection targets
+  resolved and a commander was seated; the default-branch build has not run yet.
