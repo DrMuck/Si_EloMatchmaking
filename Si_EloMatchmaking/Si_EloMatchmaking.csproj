@@ -9,7 +9,7 @@
     <!-- Which Silica branch to build against: "default" (Steam default branch) or "test".
          Reference DLLs live in ..\include\<branch>\ (copied from that branch's server install).
          Override with: dotnet build -c Release -p:SilicaBranch=test -->
-    <SilicaBranch Condition="'$(SilicaBranch)' == ''">default</SilicaBranch>
+    <SilicaBranch Condition="'$(SilicaBranch)' == ''">test</SilicaBranch>
     <OutputPath>bin\$(Configuration)\$(SilicaBranch)\</OutputPath>
     <IntermediateOutputPath>obj\$(Configuration)\$(SilicaBranch)\</IntermediateOutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
