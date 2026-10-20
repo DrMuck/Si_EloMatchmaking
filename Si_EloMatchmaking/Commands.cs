@@ -9,13 +9,14 @@
    !elo help
 
    admin (Power.Commander):
-   !elo on | off             matchmaking master switch
+   !elo on | off             matchmaking master switch (also !elo matchmaking on|off)
    !elo reload               reload ratings.json (after replacing it with a new seed)
    !elo reset confirm        new season: back up ratings.json and start everyone at the start rating (flex flags kept)
    !elo set <name|steamid> <rating>
    !elo swap on|off          Sol<->Centauri applicant moves
    !elo volunteers on|off    !flex volunteers for seats without applicants
    !elo spread <weight>      SpreadWeight (1.0 = balanced-first, 0.3 = level-first)
+   !elo seat <faction> <player>   pin a commander for the next round (Pins.cs); !elo seat lists, !elo unseat drops
 */
 using MelonLoader;
 using SilicaAdminMod;
@@ -74,7 +75,7 @@ namespace Si_EloMatchmaking
                     ShowOwn(caller);
                     return;
                 case "help":
-                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo status" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>" : ""));
+                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo status" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>, seat <faction> <player>, unseat <faction|all>" : ""));
                     return;
                 case "top":
                     ShowTop(caller);
@@ -88,11 +89,24 @@ namespace Si_EloMatchmaking
                     return;
             }
 
-            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "reset")
+            // "!elo matchmaking on|off" is the switch form of on/off (used by the Si_ModUI switch row)
+            if (sub == "matchmaking")
+            {
+                string want = rest.Trim().ToLowerInvariant();
+                if (want != "on" && want != "off") { GameApi.Say(caller, $"Matchmaking is {(Cfg.Enabled ? "ON" : "OFF")}. Usage: !elo matchmaking on|off"); return; }
+                sub = want;
+            }
+            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "reset" || sub == "seat" || sub == "unseat")
             {
                 if (!IsAdmin(caller)) { GameApi.Say(caller, "Admin only."); return; }
                 switch (sub)
                 {
+                    case "seat":
+                        HandleSeat(caller, rest);
+                        return;
+                    case "unseat":
+                        HandleUnseat(caller, rest);
+                        return;
                     case "on":
                         Cfg.Enabled = true; ConfigStore.Save(Cfg);
                         GameApi.SayAll("Elo matchmaking ON: commanders are picked by rating at round start.");
@@ -214,7 +228,8 @@ namespace Si_EloMatchmaking
         {
             var strat = GameApi.Strat;
             if (strat == null) { GameApi.Say(caller, "No strategy game mode active."); return; }
-            GameApi.Say(caller, $"Matchmaking {(Cfg.Enabled ? "ON" : "OFF")}, swap {(Cfg.AllowHumanFactionSwap ? "on" : "off")}, volunteers {(Cfg.AllowVolunteers ? "on" : "off")}, spread weight {Cfg.SpreadWeight.ToString("0.##", CultureInfo.InvariantCulture)}, CommMgmt {(GameApi.HasCommMgmt ? "linked" : "absent")}.");
+            GameApi.Say(caller, $"Matchmaking {(Cfg.Enabled ? "ON" : "OFF")}, swap {(Cfg.AllowHumanFactionSwap ? "on" : "off")}, volunteers {(Cfg.AllowVolunteers ? "on" : "off")}, spread weight {Cfg.SpreadWeight.ToString("0.##", CultureInfo.InvariantCulture)}, CommMgmt {(GameApi.HasCommMgmt ? "linked" : "absent")}."
+                + (_pins.Count > 0 ? " Pinned: " + string.Join(", ", _pins.Select(p => $"{GameApi.Short(p.Key)}: {p.Value.Name}")) + "." : ""));
             bool pre;
             try { pre = strat.MissionState == GameModeExt.EMissionState.INIT && strat.TeamsVersus != GameModeExt.ETeamsVersus.NONE; } catch { pre = false; }
             if (pre)
@@ -223,8 +238,9 @@ namespace Si_EloMatchmaking
                 var cands = CollectPool(strat, seats, consume: false);
                 if (cands.Count == 0) { GameApi.Say(caller, "No applicants yet."); return; }
                 GameApi.Say(caller, "Applicants: " + string.Join(", ", cands.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)} {Db.FormatShort(c.Steam)}{(c.Flex ? " flex" : "")}{(c.WaitBonus > 0 ? $"+{c.WaitBonus:0}w" : "")}")));
-                var best = Matchmaker.Solve(seats, cands, Cfg, Rng);
-                var parts = seats.Select((s, i) => $"{GameApi.Short(s.Faction)}: {(best.Picks[i] == null ? "AI" : best.Picks[i]!.Name)}");
+                var fixedPicks = FixedPicks(strat, seats, cands, announceMissing: false);
+                var best = Matchmaker.Solve(seats, cands, Cfg, Rng, fixedPicks);
+                var parts = seats.Select((s, i) => $"{GameApi.Short(s.Faction)}: {(best.Picks[i] == null ? "AI" : best.Picks[i]!.Name)}{(fixedPicks != null && fixedPicks[i] != null ? " (pinned)" : "")}");
                 GameApi.Say(caller, "Projected: " + string.Join(" vs ", parts) + $" (mean {best.Mean:0}, spread {best.Spread:0})");
             }
             else if (LastAssignment != null)

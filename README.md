@@ -21,6 +21,8 @@ against the default branch, git branch `test` against the test branch (see Build
   (10 min) of the end of a round their team lost is charged as if they had stayed to the end.
 - **Chat display.** Applicants with rating during the countdown, the matchup with win chances at
   round start, team mean player Elo at round start, rating changes at round end.
+- **Admin pins.** `!elo seat <faction> <player>` fixes a commander seat for the next round ahead of
+  the pick, for organised matches (see Commands).
 
 ## Matchmaking objective
 
@@ -127,11 +129,25 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo <name>` | all | look up a commander |
 | `!flex` / `!elo flex` | all | toggle "I take any commander seat, Alien included" (persisted) |
 | `!elo status` | all | applicant pool and projected matchup during the countdown |
-| `!elo on` / `off` | admin (Commander power) | master switch; off = vanilla lottery, ratings still tracked |
+| `!elo on` / `off` (also `!elo matchmaking on\|off`) | admin (Commander power) | master switch; off = vanilla lottery, ratings still tracked |
 | `!elo reload` | admin | reload ratings.json |
 | `!elo reset confirm` | admin | new season: back up and wipe all ratings (for the 1.0 launch) |
 | `!elo set <name> <rating>` | admin | override a commander rating |
 | `!elo swap on/off`, `!elo volunteers on/off`, `!elo spread <w>` | admin | tune the objective |
+| `!elo seat <sol\|cent\|alien> <player>` | admin | pin this player as commander of that faction for the next round, ahead of the Elo pick (organised matches); `!elo seat` lists the pins |
+| `!elo unseat <faction>` / `!elo unseat all` | admin | drop a pin |
+
+Pins are kept in memory and consumed at the next round start (one round only). They also work while
+matchmaking is OFF: the pick then runs for that one round with the pinned seats fixed and the other
+seats filled by rating. A pinned player who is not on the server at round start is skipped with a chat
+notice. The pinned player is moved to the faction if needed and counts as that faction's own applicant
+(no swap or volunteer penalty), so the remaining seats are still chosen for the best matchup around them.
+
+### Si_ModUI
+
+`Pins.cs` exposes `ModUIData()` for the Si_ModUI server mod: the `!elo` sub-commands become
+buttons in ModUI (player ones for everyone, admin ones only for admins), `/elo seat` opens a team
+picker followed by a player picker, `/elo unseat` lists the current pins.
 
 ## How the pick is wired into the game (0.9.47 and 1.0.2, same flow)
 

@@ -9,6 +9,8 @@
    seats the assignment that maximises rating level minus rating spread, may move a Sol
    applicant to Centauri (or vice versa) and may use !flex volunteers for an empty Alien seat.
  - Shows the matchup with ratings and win chances in chat, and the rating changes at the end.
+ - Admin pins (!elo seat <faction> <player>) fix a seat for the next round ahead of the pick
+   (organised matches); Pins.cs. Pins.cs also exports the sub-commands to Si_ModUI.
  - Leaver rule: a commander who drops out in the last 10 minutes of a lost round still takes
    the loss.
 
@@ -38,7 +40,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.3.1";
+        public const string Version = "0.4.1";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();
@@ -148,7 +150,7 @@ namespace Si_EloMatchmaking
         static void OnRoundStarted(MP_Strategy strat)
         {
             _preRoundActive = false;
-            if (Cfg.Enabled) RunMatchmaking(strat);
+            if (Cfg.Enabled || HasPins) RunMatchmaking(strat);   // admin pins run the pick for this one round even while OFF
             StartTracker(strat);
             if (Cfg.PlayerBalanceReport) ReportPlayerBalance(strat);
         }
@@ -218,6 +220,8 @@ namespace Si_EloMatchmaking
         {
             var seats = BuildSeats(strat);
             var cands = CollectPool(strat, seats, consume: true);
+            var fixedPicks = FixedPicks(strat, seats, cands, announceMissing: true);
+            _pins.Clear();   // one round only
             LastAssignment = null;
             if (seats.Count == 0)
             {
@@ -230,8 +234,11 @@ namespace Si_EloMatchmaking
                 return;
             }
 
-            var best = Matchmaker.Solve(seats, cands, Cfg, Rng);
+            var best = Matchmaker.Solve(seats, cands, Cfg, Rng, fixedPicks);
             LastAssignment = best;
+            if (fixedPicks != null)
+                for (int i = 0; i < seats.Count; i++)
+                    if (fixedPicks[i] != null) GameApi.SayAll($"Admin pick: {GameApi.Colored(seats[i].Team, fixedPicks[i]!.Name)} commands {GameApi.Short(seats[i].Faction)}.");
             if (Cfg.Debug)
             {
                 MelonLogger.Msg($"[Elo] Pool: " + string.Join(", ", cands.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)}={c.Rating:0}~{c.Sigma:0}+{c.WaitBonus:0}/{c.Games}g{(c.Flex ? " flex" : "")}[{c.Source}]")));
