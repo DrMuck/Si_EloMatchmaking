@@ -75,10 +75,12 @@ namespace Si_EloMatchmaking
             return null;
         }
 
-        public static Assignment Solve(List<Seat> seats, List<Candidate> cands, EloConfig cfg, Random rng)
+        /// <param name="fixedPicks">Optional per-seat pre-assignment (admin pins): that seat always takes that candidate.</param>
+        public static Assignment Solve(List<Seat> seats, List<Candidate> cands, EloConfig cfg, Random rng, Candidate?[]? fixedPicks = null)
         {
             // Random order breaks ties between equal ratings fairly.
             var pool = cands.OrderBy(_ => rng.Next()).ToList();
+            if (fixedPicks != null) pool = pool.Where(c => Array.IndexOf(fixedPicks, c) < 0).ToList();
 
             // Optional: when enough established applicants exist, ignore provisional ones.
             if (cfg.PreferEstablishedMinGames > 0)
@@ -90,15 +92,22 @@ namespace Si_EloMatchmaking
             var best = new Assignment { Seats = seats, Picks = new Candidate?[seats.Count] };
             var cur = new Candidate?[seats.Count];
             var used = new HashSet<Candidate>();
-            Recurse(0, seats, pool, cfg, cur, used, best);
+            Recurse(0, seats, pool, cfg, cur, used, best, fixedPicks);
             return best;
         }
 
-        static void Recurse(int i, List<Seat> seats, List<Candidate> pool, EloConfig cfg, Candidate?[] cur, HashSet<Candidate> used, Assignment best)
+        static void Recurse(int i, List<Seat> seats, List<Candidate> pool, EloConfig cfg, Candidate?[] cur, HashSet<Candidate> used, Assignment best, Candidate?[]? fixedPicks)
         {
             if (i == seats.Count)
             {
                 Evaluate(seats, cur, cfg, best);
+                return;
+            }
+            if (fixedPicks != null && i < fixedPicks.Length && fixedPicks[i] != null)
+            {
+                cur[i] = fixedPicks[i];
+                Recurse(i + 1, seats, pool, cfg, cur, used, best, fixedPicks);
+                cur[i] = null;
                 return;
             }
             foreach (var c in pool)
@@ -106,11 +115,11 @@ namespace Si_EloMatchmaking
                 if (used.Contains(c)) continue;
                 if (Eligibility(seats[i], c, cfg) == null) continue;
                 cur[i] = c; used.Add(c);
-                Recurse(i + 1, seats, pool, cfg, cur, used, best);
+                Recurse(i + 1, seats, pool, cfg, cur, used, best, fixedPicks);
                 used.Remove(c); cur[i] = null;
             }
             cur[i] = null;
-            Recurse(i + 1, seats, pool, cfg, cur, used, best);
+            Recurse(i + 1, seats, pool, cfg, cur, used, best, fixedPicks);
         }
 
         static void Evaluate(List<Seat> seats, Candidate?[] cur, EloConfig cfg, Assignment best)
