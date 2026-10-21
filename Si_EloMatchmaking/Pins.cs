@@ -75,6 +75,34 @@ namespace Si_EloMatchmaking
         /// the candidate list (as applicant for that very team, so no swap or volunteer penalty applies) and a seat is
         /// added for a pinned faction whose team is active but still empty. Returns null when nothing is pinned.
         /// </summary>
+        // !elo force: seat the pinned commanders in the running round right now, then drop the pins so they do not
+        // apply again at the next round start. Uses the same move + seat path as the round-start assignment.
+        static void HandleForce(Player? caller)
+        {
+            if (_pins.Count == 0) { GameApi.Say(caller, "No pinned seats. Pin first: !elo seat <faction> <player>."); return; }
+            var strat = GameApi.Strat;
+            if (strat == null) { GameApi.Say(caller, "No strategy match is running."); return; }
+            var online = GameApi.ConnectedPlayers().ToDictionary(GameApi.SteamId, p => p);
+            var teams = GameApi.ActiveTeams(strat);
+            int done = 0;
+            foreach (var kv in _pins.ToList())
+            {
+                if (!online.TryGetValue(kv.Value.Steam, out var player)) { GameApi.Say(caller, $"{kv.Value.Name} is not on the server; {GameApi.Short(kv.Key)} unchanged."); continue; }
+                var team = teams.FirstOrDefault(t => GameApi.Faction(t) == kv.Key);
+                if (team == null) { GameApi.Say(caller, $"{GameApi.Short(kv.Key)} is not in this match."); continue; }
+                if (player.Team != team && !GameApi.MovePlayer(player, team)) { GameApi.Say(caller, $"Could not move {kv.Value.Name} to {GameApi.Short(kv.Key)}."); continue; }
+                if (GameApi.SeatCommander(strat, team, player))
+                {
+                    done++;
+                    MelonLogger.Msg($"[Elo] Forced seat: {player.PlayerName} -> {kv.Key} by {caller?.PlayerName ?? "console"}");
+                    GameApi.SayAll($"Admin pick: {GameApi.Colored(team, player.PlayerName)} now commands {GameApi.Short(kv.Key)}.");
+                }
+                else GameApi.Say(caller, $"Seating {kv.Value.Name} on {GameApi.Short(kv.Key)} failed (see the server log).");
+            }
+            _pins.Clear();
+            GameApi.Say(caller, $"{done} commander seat(s) forced; pins cleared, the next round is chosen by rating again.");
+        }
+
         static Candidate?[]? FixedPicks(MP_Strategy strat, List<Seat> seats, List<Candidate> cands, bool announceMissing)
         {
             if (_pins.Count == 0) return null;
@@ -120,28 +148,39 @@ namespace Si_EloMatchmaking
 
         // ---- Si_ModUI: the sub-commands behind !elo as buttons (ModUI_Export.cs builder, contract in ModUI README).
         // Admin entries never reach players without the power; switches carry their current state.
+        // Si_ModUI per-player hook: this player's own flex state for the /flex switch row.
+        public static string? ModUIPlayerData(ulong steamId)
+        {
+            try { return ModUI.ModUIExport.PlayerValues(("/flex", Db != null && Db.IsFlex(steamId.ToString()) ? "on" : "off")); }
+            catch (Exception ex) { MelonLogger.Warning("[Elo] ModUIPlayerData: " + ex.Message); return null; }
+        }
+
         public static string? ModUIData()
         {
             try
             {
                 var x = ModUI.ModUIExport.New()
+                    .Enabled(Cfg.Enabled)
                     .Info($"Matchmaking {(Cfg.Enabled ? "ON" : "OFF")} | Sol-Centauri swap {(Cfg.AllowHumanFactionSwap ? "on" : "off")} | flex volunteers {(Cfg.AllowVolunteers ? "on" : "off")} | spread weight {Cfg.SpreadWeight.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}")
                     .Info((_pins.Count == 0 ? "no pinned commanders" : "pinned: " + string.Join(", ", _pins.Select(p => $"{GameApi.Short(p.Key)} {p.Value.Name}"))) + " (pins apply to the next round start, even while matchmaking is OFF)")
                     .Action("/elo", "My rating", "Your commander and player Elo, flex state and seating bonus.")
                     .Action("/elo top", "Top commanders", "The five best established commanders.")
                     .Action("/elo status", "Status", "Switches; during the countdown the applicant pool and the projected matchup.")
-                    .Action("/flex", "Flex toggle", "Accept any commander seat, Alien included, when that gives the best matchup. Your own setting, remembered across sessions.")
+                    // Per-player state: the shared export has no current value; ModUIPlayerData fills it per player.
+                    .Switch("/flex", "Flex", "Accept any commander seat, Alien included, when that gives the best matchup. Your own setting, remembered across sessions.", admin: false, current: "", ("on", "ON"), ("off", "OFF"))
                     .Picker("/elo seat", "Pin commander", "Pick the faction next to the player: that player commands it at the next round start, ahead of the Elo pick (one round).", admin: true, arg: "team,player");
-                if (_pins.Count == 0) x.Action("/elo unseat", "Drop pin", "Nothing is pinned right now.", admin: true);
-                else x.Picker("/elo unseat", "Drop pin", "Drop a pinned commander seat.", admin: true, arg: "choice",
-                        _pins.Select(p => (p.Key, $"{GameApi.Short(p.Key)}: {p.Value.Name}")).Concat(new[] { ("all", "All pins") }).ToArray());
+                if (_pins.Count > 0)
+                    x.Picker("/elo unseat", "Drop one pin", "Drop a single pinned seat.", admin: true, arg: "choice",
+                        _pins.Select(p => (p.Key, $"{GameApi.Short(p.Key)}: {p.Value.Name}")).ToArray());
+                x.Action("/elo unseat all", "Clear all pins", _pins.Count == 0 ? "Nothing is pinned right now." : "Undo every pin; the next commanders are chosen by rating again.", admin: true)
+                 .Action("/elo force", "Force pins now", "Seats the pinned commanders in the running round immediately and clears the pins, so they do not apply again next round.", admin: true);
                 x.OnOff("/elo matchmaking", "Matchmaking", "ON: commanders are picked by rating at round start. OFF: the normal commander lottery; ratings are still tracked.", admin: true, on: Cfg.Enabled)
                  .OnOff("/elo swap", "Sol-Centauri swap", "May a Sol applicant be seated as Centauri commander and vice versa?", admin: true, on: Cfg.AllowHumanFactionSwap)
                  .OnOff("/elo volunteers", "Flex volunteers", "May !flex volunteers fill a seat nobody applied for?", admin: true, on: Cfg.AllowVolunteers)
                  .Value("/elo spread", "Spread weight", "1.0 = balanced first, 0.3 = level first.", admin: true, current: Cfg.SpreadWeight)
-                 .Action("/elo set", "Set rating", "Arguments: the player name or Steam ID, then the rating.", admin: true)
+                 .Picker("/elo set", "Set rating", "Pick the player, then type the new rating.", admin: true, arg: "player,text")
                  .Action("/elo reload", "Reload ratings", "Re-read ratings.json after replacing it.", admin: true)
-                 .Action("/elo reset", "Season reset", "Arguments: confirm. Backs up and wipes all ratings.", admin: true);
+                 .Picker("/elo reset", "Season reset", "Backs up and wipes all ratings; asks for confirmation.", admin: true, arg: "choice", ("confirm", "Confirm wipe"));
                 return x.Build();
             }
             catch (Exception ex)
