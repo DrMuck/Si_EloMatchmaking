@@ -51,6 +51,14 @@ namespace Si_EloMatchmaking
         static void OnFlexCommand(Player? caller, string args)
         {
             if (caller == null) { GameApi.Say(null, "!flex is a player command."); return; }
+            // "!flex on|off" (Si_ModUI switch row) sets the state; bare "!flex" toggles as before.
+            var parts = (args ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            string want = parts.Length > 1 ? parts[1].ToLowerInvariant() : "";
+            if (want == "on" || want == "off")
+            {
+                bool wantOn = want == "on";
+                if (Db.IsFlex(GameApi.SteamId(caller)) == wantOn) { GameApi.Say(caller, "Flex is already " + (wantOn ? "ON" : "OFF") + "."); return; }
+            }
             ToggleFlex(caller);
         }
 
@@ -75,7 +83,7 @@ namespace Si_EloMatchmaking
                     ShowOwn(caller);
                     return;
                 case "help":
-                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo status" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>, seat <faction> <player>, unseat <faction|all>" : ""));
+                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo status" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>, seat <faction> <player>, unseat <faction|all>, force" : ""));
                     return;
                 case "top":
                     ShowTop(caller);
@@ -96,13 +104,16 @@ namespace Si_EloMatchmaking
                 if (want != "on" && want != "off") { GameApi.Say(caller, $"Matchmaking is {(Cfg.Enabled ? "ON" : "OFF")}. Usage: !elo matchmaking on|off"); return; }
                 sub = want;
             }
-            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "reset" || sub == "seat" || sub == "unseat")
+            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "reset" || sub == "seat" || sub == "unseat" || sub == "force")
             {
                 if (!IsAdmin(caller)) { GameApi.Say(caller, "Admin only."); return; }
                 switch (sub)
                 {
                     case "seat":
                         HandleSeat(caller, rest);
+                        return;
+                    case "force":
+                        HandleForce(caller);
                         return;
                     case "unseat":
                         HandleUnseat(caller, rest);
