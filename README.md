@@ -110,7 +110,11 @@ Si_BasicTeamBalance's own MelonPreferences values (one config for the counts), a
 - **`!reserve <team>`.** Queue for a spot on another team; `!reserve off` leaves, `!reserve` shows
   the queue. Every 2 s the first in line whose move keeps the counts legal and does not widen the
   Elo gap past the limit is moved, at their next respawn (`BalanceReserveAtRespawnOnly`), so no unit
-  is destroyed under them. The list is cleared at round start and end.
+  is destroyed under them. Two mirrored reservations (a Sol player wants Centauri, a Centauri player
+  wants Sol) are approved as a **swap**: counts cannot free a spot for either alone, so both are
+  cleared together (Elo check on the combined result) and each moves at their own next respawn; if
+  one of them leaves before moving, the other falls back to the normal queue. The list is cleared at
+  round start and end.
 
 `!elo balance` shows the state (mean player Elo per team, allowed difference, whether Elo placement
 is active); `!elo balance on|off` (admin) is the master switch. `BalanceTakeOverJoinHandling=false`
@@ -262,8 +266,9 @@ journal truncated. Load replays the journal (verified identical in a harness).
 - Player Elo balance only acts on fresh joiners at round start and on `!reserve` volunteers; nobody
   is moved against their choice. Si_BasicTeamBalance's join prefix is removed at start-up when
   `BalanceTakeOverJoinHandling` is on (see Team balance).
-- The join takeover is harness-tested for the rule and reference-checked for the API, but the live
-  packet path (read, clear request, placement) has not been exercised in game yet.
+- The join takeover is harness-tested for the rule and reference-checked for the API; a server
+  start on Release 1.0.4 (2026-10-22) showed the prefix removal and no errors, but the live packet
+  path (read, clear request, placement) has not been exercised with a joining player yet.
 - Mid-round commander takeovers are left to the game (whoever presses Commander gets the empty seat).
 - 0.5.0 (2026-10-22, tiers / rotation / pass / vote) is verified in the scenario harness only; the
   pick itself (seating, moves, CommManagement handover) is unchanged from 0.3.1.

@@ -130,6 +130,27 @@ namespace Si_EloMatchmaking
             return Verdict.Allow;
         }
 
+        /// <summary>Two mirrored reservations (A to `toA`, B to `toB`, both excluded from `states`): counts stay as they are, only the Elo gap is checked.</summary>
+        public static bool CanSwap(List<TeamState> states, int toA, int toB, double ratingA, double ratingB, double eloGapMax, out string why)
+        {
+            why = "";
+            if (toA < 0 || toB < 0 || toA >= states.Count || toB >= states.Count || toA == toB) { why = "teams not in this match"; return false; }
+            double before = Gap(states);
+            double max = double.NegativeInfinity, min = double.PositiveInfinity;
+            for (int i = 0; i < states.Count; i++)
+            {
+                int n = states[i].Count; double sum = states[i].MeanElo * n;
+                if (i == toA) { n++; sum += ratingA; }
+                if (i == toB) { n++; sum += ratingB; }
+                if (n == 0) continue;
+                double m = sum / n;
+                if (m > max) max = m; if (m < min) min = m;
+            }
+            double after = max > min ? max - min : 0;
+            if (after > eloGapMax && after > before + 1e-9) { why = $"the swap would widen the Elo gap to {after:0}"; return false; }
+            return true;
+        }
+
         /// <summary>!reserve: may the queued player (excluded from `states`) move to `target` now?</summary>
         public static bool CanMove(List<TeamState> states, int target, double rating, int maxDiff, double eloGapMax, out string why)
         {
@@ -149,7 +170,12 @@ namespace Si_EloMatchmaking
         static bool _btbChecked;
         static float _balancePoll, _lastAsk;
         static Player? _lastBalanceChat;
-        class Reservation { public string Steam = ""; public string Name = ""; public string Faction = ""; public float Since; }
+        class Reservation
+        {
+            public string Steam = ""; public string Name = ""; public string Faction = ""; public float Since;
+            /// <summary>Steam ID of a mirrored reservation this one was approved with as a swap (counts restored once both moved).</summary>
+            public string? Partner;
+        }
         static readonly List<Reservation> _reserve = new List<Reservation>();
 
         // ---- set-up ---------------------------------------------------------
@@ -214,7 +240,7 @@ namespace Si_EloMatchmaking
 
         // ---- state snapshot ---------------------------------------------------
         /// <summary>Active, not-yet-lost teams with their connected players' counts and mean player Elo, `exclude` left out.</summary>
-        static List<BalanceRule.TeamState> TeamStates(MP_Strategy strat, Player? exclude, out List<Team> teams)
+        static List<BalanceRule.TeamState> TeamStates(MP_Strategy strat, Player? exclude, out List<Team> teams, Player? exclude2 = null)
         {
             teams = new List<Team>();
             var states = new List<BalanceRule.TeamState>();
@@ -231,7 +257,7 @@ namespace Si_EloMatchmaking
                 var sums = new double[states.Count];
                 foreach (var p in GameApi.ConnectedPlayers())
                 {
-                    if (p == null || ReferenceEquals(p, exclude)) continue;
+                    if (p == null || ReferenceEquals(p, exclude) || (exclude2 != null && ReferenceEquals(p, exclude2))) continue;
                     var t = p.Team;
                     if (t == null) continue;
                     int i = IndexOfTeam(teams, t);
@@ -401,23 +427,62 @@ namespace Si_EloMatchmaking
         {
             if (_reserve.Count == 0) return;
             var online = GameApi.ConnectedPlayers().ToDictionary(GameApi.SteamId, p => p);
+            PairReservations(strat, online);
             foreach (var r in _reserve.ToList())
             {
-                if (!online.TryGetValue(r.Steam, out var player)) { _reserve.Remove(r); continue; }
+                if (!online.TryGetValue(r.Steam, out var player)) { Drop(r, moved: false); continue; }
                 var states = TeamStates(strat, player, out var teams);
                 int target = -1;
                 for (int i = 0; i < teams.Count; i++) if (GameApi.Faction(teams[i]) == r.Faction) target = i;
-                if (target < 0) { GameApi.Say(player, $"{r.Faction} is not in this match any more; reservation dropped."); _reserve.Remove(r); continue; }
-                if (ReferenceEquals(player.Team, teams[target])) { _reserve.Remove(r); continue; }
+                if (target < 0) { GameApi.Say(player, $"{r.Faction} is not in this match any more; reservation dropped."); Drop(r, moved: false); continue; }
+                if (ReferenceEquals(player.Team, teams[target])) { Drop(r, moved: true); continue; }
                 if (Cfg.BalanceReserveAtRespawnOnly) { try { if (player.ControlledUnit != null) continue; } catch { } }
-                int maxDiff = MaxDiffNow(states.Count);
-                if (!BalanceRule.CanMove(states, target, Db.PlayerRating(r.Steam), maxDiff, Cfg.BalanceEloGapMax, out string why)) continue;
-                if (!GameApi.MovePlayer(player, teams[target])) { _reserve.Remove(r); continue; }
+                // an approved swap partner moves regardless of the counts: the other half restores them
+                if (r.Partner == null && !BalanceRule.CanMove(states, target, Db.PlayerRating(r.Steam), MaxDiffNow(states.Count), Cfg.BalanceEloGapMax, out _)) continue;
+                if (!GameApi.MovePlayer(player, teams[target])) { Drop(r, moved: false); continue; }
                 GameApi.RespawnIfUnitless(player);
-                _reserve.Remove(r);
-                MelonLogger.Msg($"[Elo] Reserve: {player.PlayerName} moved to {r.Faction} after {Time.time - r.Since:0}s.");
-                GameApi.SayAll($"{GameApi.Colored(teams[target], player.PlayerName)} moves to {GameApi.Short(r.Faction)} (reserved spot).");
+                string partner = r.Partner != null ? _reserve.FirstOrDefault(x => x.Steam == r.Partner)?.Name ?? "" : "";
+                Drop(r, moved: true);
+                MelonLogger.Msg($"[Elo] Reserve: {player.PlayerName} moved to {r.Faction} after {Time.time - r.Since:0}s" + (partner.Length > 0 ? $" (swap with {partner})" : "") + ".");
+                GameApi.SayAll($"{GameApi.Colored(teams[target], player.PlayerName)} moves to {GameApi.Short(r.Faction)} (" + (partner.Length > 0 ? $"swap with {partner}" : "reserved spot") + ").");
                 break;   // one move per tick, counts changed
+            }
+        }
+
+        /// <summary>Remove a reservation. A partner still waiting keeps its approval when this one moved (it owes the counts a move) and loses it otherwise.</summary>
+        static void Drop(Reservation r, bool moved)
+        {
+            _reserve.Remove(r);
+            if (r.Partner == null) return;
+            var other = _reserve.FirstOrDefault(x => x.Steam == r.Partner);
+            if (other != null && !moved) other.Partner = null;
+        }
+
+        /// <summary>Mirrored reservations (A on Sol wants Cent, B on Cent wants Sol) are approved as a swap when the Elo gap allows it.</summary>
+        static void PairReservations(MP_Strategy strat, Dictionary<string, Player> online)
+        {
+            foreach (var a in _reserve)
+            {
+                if (a.Partner != null || !online.TryGetValue(a.Steam, out var pa) || pa.Team == null) continue;
+                string aFrom = GameApi.Faction(pa.Team);
+                foreach (var b in _reserve)
+                {
+                    if (ReferenceEquals(a, b) || b.Partner != null || !online.TryGetValue(b.Steam, out var pb) || pb.Team == null) continue;
+                    if (GameApi.Faction(pb.Team) != a.Faction || b.Faction != aFrom) continue;
+                    var states = TeamStates(strat, pa, out var teams, pb);
+                    int toA = -1, toB = -1;
+                    for (int i = 0; i < teams.Count; i++) { if (GameApi.Faction(teams[i]) == a.Faction) toA = i; if (GameApi.Faction(teams[i]) == b.Faction) toB = i; }
+                    if (!BalanceRule.CanSwap(states, toA, toB, Db.PlayerRating(a.Steam), Db.PlayerRating(b.Steam), Cfg.BalanceEloGapMax, out string why))
+                    {
+                        if (Time.time - a.Since < 3f) GameApi.Say(pa, $"{b.Name} wants the opposite move, but {why}; both of you stay queued.");
+                        continue;
+                    }
+                    a.Partner = b.Steam; b.Partner = a.Steam;
+                    MelonLogger.Msg($"[Elo] Reserve: swap approved {a.Name} -> {a.Faction} / {b.Name} -> {b.Faction}.");
+                    GameApi.Say(pa, $"Swap arranged with {b.Name}: you move to {GameApi.Short(a.Faction)} at your next respawn, they move to {GameApi.Short(b.Faction)} at theirs.");
+                    GameApi.Say(pb, $"Swap arranged with {a.Name}: you move to {GameApi.Short(b.Faction)} at your next respawn, they move to {GameApi.Short(a.Faction)} at theirs.");
+                    break;
+                }
             }
         }
 
