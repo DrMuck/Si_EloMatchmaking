@@ -9,6 +9,8 @@
    !elo pass [on|off]        toggle: "seat someone else if another applicant of similar rating applies" (persisted; Tiers.cs)
    !elo vote <tier>          vote the Elo tier of the next commander matchup (any|low|mid|midhigh|high; Tiers.cs)
    !elo status               current applicant pool, next tier and the matchup it would produce
+   !elo balance [on|off]     team balance status (TeamBalance.cs); on/off is admin
+   !reserve <team> | off     queue for a spot on another team, moved at the next respawn (TeamBalance.cs)
    !elo help
 
    admin (Power.Commander):
@@ -129,13 +131,16 @@ namespace Si_EloMatchmaking
                     ShowOwn(caller);
                     return;
                 case "help":
-                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo pass | !elo vote <any|low|mid|midhigh|high> | !elo status" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>, level <w>, tier <tier|auto>, tiers <n=tier,...>, seat <faction> <player>, unseat <faction|all>, force" : ""));
+                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo pass | !elo vote <any|low|mid|midhigh|high> | !elo status | !elo balance | !reserve <team>" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>, level <w>, tier <tier|auto>, tiers <n=tier,...>, balance on/off, seat <faction> <player>, unseat <faction|all>, force" : ""));
                     return;
                 case "top":
                     ShowTop(caller);
                     return;
                 case "pass":
                     HandlePass(caller, rest);
+                    return;
+                case "balance":
+                    HandleBalance(caller, rest);
                     return;
                 case "vote":
                     HandleVote(caller, rest);
