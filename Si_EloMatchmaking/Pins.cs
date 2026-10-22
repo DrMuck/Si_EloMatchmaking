@@ -129,7 +129,7 @@ namespace Si_EloMatchmaking
                     {
                         Player = player, Steam = kv.Value.Steam, Name = player.PlayerName ?? kv.Value.Name,
                         Rating = Db.CommanderRating(kv.Value.Steam), Games = Db.CommanderGames(kv.Value.Steam), Sigma = Db.Sigma(Db.CommanderGames(kv.Value.Steam)),
-                        WaitBonus = Db.WaitBonus(kv.Value.Steam), Flex = Db.IsFlex(kv.Value.Steam), Recent = _lastRoundCommanders.Contains(kv.Value.Steam), Source = "pinned",
+                        WaitBonus = Db.WaitBonus(kv.Value.Steam), Flex = Db.IsFlex(kv.Value.Steam), Streak = Db.Streak(kv.Value.Steam), Recent = Db.Streak(kv.Value.Steam) > 0, Source = "pinned",
                     };
                     cands.Add(cand);
                 }
@@ -151,7 +151,14 @@ namespace Si_EloMatchmaking
         // Si_ModUI per-player hook: this player's own flex state for the /flex switch row.
         public static string? ModUIPlayerData(ulong steamId)
         {
-            try { return ModUI.ModUIExport.PlayerValues(("/flex", Db != null && Db.IsFlex(steamId.ToString()) ? "on" : "off")); }
+            try
+            {
+                string steam = steamId.ToString();
+                return ModUI.ModUIExport.PlayerValues(
+                    ("/flex", Db != null && Db.IsFlex(steam) ? "on" : "off"),
+                    ("/elo pass", Db != null && Db.IsPass(steam) ? "on" : "off"),
+                    ("/elo vote", _tierVotes.TryGetValue(steam, out var v) ? v : ""));
+            }
             catch (Exception ex) { MelonLogger.Warning("[Elo] ModUIPlayerData: " + ex.Message); return null; }
         }
 
@@ -163,11 +170,16 @@ namespace Si_EloMatchmaking
                     .Enabled(Cfg.Enabled)
                     .Info($"Matchmaking {(Cfg.Enabled ? "ON" : "OFF")} | Sol-Centauri swap {(Cfg.AllowHumanFactionSwap ? "on" : "off")} | flex volunteers {(Cfg.AllowVolunteers ? "on" : "off")} | spread weight {Cfg.SpreadWeight.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}")
                     .Info((_pins.Count == 0 ? "no pinned commanders" : "pinned: " + string.Join(", ", _pins.Select(p => $"{GameApi.Short(p.Key)} {p.Value.Name}"))) + " (pins apply to the next round start, even while matchmaking is OFF)")
-                    .Action("/elo", "My rating", "Your commander and player Elo, flex state and seating bonus.")
+                    .Info("Next pick: " + TierSummary(ConnectedCount()))
+                    .Action("/elo", "My rating", "Your commander and player Elo, flex/pass state, streak and seating bonus.")
                     .Action("/elo top", "Top commanders", "The five best established commanders.")
-                    .Action("/elo status", "Status", "Switches; during the countdown the applicant pool and the projected matchup.")
+                    .Action("/elo status", "Status", "Switches and the next tier; during the countdown the applicant pool and the projected matchup.")
                     // Per-player state: the shared export has no current value; ModUIPlayerData fills it per player.
                     .Switch("/flex", "Flex", "Accept any commander seat, Alien included, when that gives the best matchup. Your own setting, remembered across sessions.", admin: false, current: "", ("on", "ON"), ("off", "OFF"))
+                    .Switch("/elo pass", "Pass", "Still apply, but step aside when another applicant of similar rating applies for your seat. Your own setting, remembered across sessions.", admin: false, current: "", ("on", "ON"), ("off", "OFF"))
+                    .Switch("/elo vote", "Vote next tier", "Vote which Elo tier the next commander matchup aims for (needs a quorum; an admin setting wins).", admin: false, current: "", ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))
+                    .Switch("/elo tier", "Next tier", "Force the tier of the next commander pick; AUTO = by vote, else by player count.", admin: true, current: _tierOverride ?? "auto", ("auto", "AUTO"), ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))
+                    .Value("/elo tiers", "Tier by players", "players=tier list, e.g. 0=any,10=midhigh,20=high (any, low, mid, midhigh, high).", admin: true, current: TierTable())
                     .Picker("/elo seat", "Pin commander", "Pick the faction next to the player: that player commands it at the next round start, ahead of the Elo pick (one round).", admin: true, arg: "team,player");
                 if (_pins.Count > 0)
                     x.Picker("/elo unseat", "Drop one pin", "Drop a single pinned seat.", admin: true, arg: "choice",
@@ -177,7 +189,8 @@ namespace Si_EloMatchmaking
                 x.OnOff("/elo matchmaking", "Matchmaking", "ON: commanders are picked by rating at round start. OFF: the normal commander lottery; ratings are still tracked.", admin: true, on: Cfg.Enabled)
                  .OnOff("/elo swap", "Sol-Centauri swap", "May a Sol applicant be seated as Centauri commander and vice versa?", admin: true, on: Cfg.AllowHumanFactionSwap)
                  .OnOff("/elo volunteers", "Flex volunteers", "May !flex volunteers fill a seat nobody applied for?", admin: true, on: Cfg.AllowVolunteers)
-                 .Value("/elo spread", "Spread weight", "1.0 = balanced first, 0.3 = level first.", admin: true, current: Cfg.SpreadWeight)
+                 .Value("/elo spread", "Spread weight", "Cost per Elo point of rating gap between the seated commanders (1.0 = even matchups first).", admin: true, current: Cfg.SpreadWeight)
+                 .Value("/elo level", "Level weight", "Weight of the mean rating: 0.3 = mild preference for strong commanders, 1.0 = level first.", admin: true, current: Cfg.LevelWeight)
                  .Picker("/elo set", "Set rating", "Pick the player, then type the new rating.", admin: true, arg: "player,text")
                  .Action("/elo reload", "Reload ratings", "Re-read ratings.json after replacing it.", admin: true)
                  .Picker("/elo reset", "Season reset", "Backs up and wipes all ratings; asks for confirmation.", admin: true, arg: "choice", ("confirm", "Confirm wipe"));

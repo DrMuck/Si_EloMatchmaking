@@ -5,7 +5,9 @@
    !elo top                  top 5 commanders (>= ProvisionalGames)
    !elo <name>               look up a commander
    !elo flex   or  !flex     toggle: "I take any commander seat, Alien included" (persisted)
-   !elo status               current applicant pool and the matchup it would produce
+   !elo pass [on|off]        toggle: "seat someone else if another applicant of similar rating applies" (persisted; Tiers.cs)
+   !elo vote <tier>          vote the Elo tier of the next commander matchup (any|low|mid|midhigh|high; Tiers.cs)
+   !elo status               current applicant pool, next tier and the matchup it would produce
    !elo help
 
    admin (Power.Commander):
@@ -16,6 +18,9 @@
    !elo swap on|off          Sol<->Centauri applicant moves
    !elo volunteers on|off    !flex volunteers for seats without applicants
    !elo spread <weight>      SpreadWeight (1.0 = balanced-first, 0.3 = level-first)
+   !elo level <weight>       LevelWeight (0.3 = mild preference for strong commanders, 1.0 = level-first)
+   !elo tier <tier>|auto     force the tier of the next pick / back to vote + player count (Tiers.cs)
+   !elo tiers 0=any,10=midhigh,20=high   tier by player count (persisted)
    !elo seat <faction> <player>   pin a commander for the next round (Pins.cs); !elo seat lists, !elo unseat drops
 */
 using MelonLoader;
@@ -83,10 +88,16 @@ namespace Si_EloMatchmaking
                     ShowOwn(caller);
                     return;
                 case "help":
-                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo status" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>, seat <faction> <player>, unseat <faction|all>, force" : ""));
+                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo pass | !elo vote <any|low|mid|midhigh|high> | !elo status" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>, level <w>, tier <tier|auto>, tiers <n=tier,...>, seat <faction> <player>, unseat <faction|all>, force" : ""));
                     return;
                 case "top":
                     ShowTop(caller);
+                    return;
+                case "pass":
+                    HandlePass(caller, rest);
+                    return;
+                case "vote":
+                    HandleVote(caller, rest);
                     return;
                 case "flex":
                     if (caller == null) GameApi.Say(null, "flex is a player command.");
@@ -104,11 +115,25 @@ namespace Si_EloMatchmaking
                 if (want != "on" && want != "off") { GameApi.Say(caller, $"Matchmaking is {(Cfg.Enabled ? "ON" : "OFF")}. Usage: !elo matchmaking on|off"); return; }
                 sub = want;
             }
-            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "reset" || sub == "seat" || sub == "unseat" || sub == "force")
+            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "level" || sub == "tier" || sub == "tiers" || sub == "reset" || sub == "seat" || sub == "unseat" || sub == "force")
             {
                 if (!IsAdmin(caller)) { GameApi.Say(caller, "Admin only."); return; }
                 switch (sub)
                 {
+                    case "tier":
+                        HandleTier(caller, rest);
+                        return;
+                    case "tiers":
+                        HandleTiers(caller, rest);
+                        return;
+                    case "level":
+                        if (double.TryParse(rest, NumberStyles.Float, CultureInfo.InvariantCulture, out double lw) && lw >= 0)
+                        {
+                            Cfg.LevelWeight = lw; ConfigStore.Save(Cfg);
+                            GameApi.Say(caller, "LevelWeight = " + lw.ToString("0.##", CultureInfo.InvariantCulture) + ".");
+                        }
+                        else GameApi.Say(caller, "LevelWeight = " + Cfg.LevelWeight.ToString("0.##", CultureInfo.InvariantCulture) + ". Usage: !elo level <weight>");
+                        return;
                     case "seat":
                         HandleSeat(caller, rest);
                         return;
@@ -223,7 +248,9 @@ namespace Si_EloMatchmaking
             string cm = c == null ? $"no commander games yet (start {Cfg.StartRating:0})" : Describe(steam, c);
             string pl = p == null ? "no rated rounds" : $"{p.rating:0} in {p.games} rounds";
             GameApi.Say(caller, $"Commander: {cm}");
-            GameApi.Say(caller, $"Player: {pl}" + (Db.IsFlex(steam) ? " | flex ON" : " | flex off (!flex to accept any seat)") + (Db.WaitingRounds(steam) > 0 ? $" | passed over {Db.WaitingRounds(steam)}x, seating bonus +{Db.WaitBonus(steam):0}" : ""));
+            GameApi.Say(caller, $"Player: {pl}" + (Db.IsFlex(steam) ? " | flex ON" : " | flex off (!flex to accept any seat)") + (Db.IsPass(steam) ? " | pass ON" : "")
+                + (Db.Streak(steam) > 0 ? $" | commanded the last {Db.Streak(steam)} round(s), streak penalty -{Matchmaker.StreakPenalty(Db.Streak(steam), Cfg):0}" : "")
+                + (Db.WaitingRounds(steam) > 0 ? $" | passed over {Db.WaitingRounds(steam)}x, seating bonus +{Db.WaitBonus(steam):0}" : ""));
         }
 
         static void ShowTop(Player? caller)
@@ -239,8 +266,9 @@ namespace Si_EloMatchmaking
         {
             var strat = GameApi.Strat;
             if (strat == null) { GameApi.Say(caller, "No strategy game mode active."); return; }
-            GameApi.Say(caller, $"Matchmaking {(Cfg.Enabled ? "ON" : "OFF")}, swap {(Cfg.AllowHumanFactionSwap ? "on" : "off")}, volunteers {(Cfg.AllowVolunteers ? "on" : "off")}, spread weight {Cfg.SpreadWeight.ToString("0.##", CultureInfo.InvariantCulture)}, CommMgmt {(GameApi.HasCommMgmt ? "linked" : "absent")}."
+            GameApi.Say(caller, $"Matchmaking {(Cfg.Enabled ? "ON" : "OFF")}, swap {(Cfg.AllowHumanFactionSwap ? "on" : "off")}, volunteers {(Cfg.AllowVolunteers ? "on" : "off")}, spread weight {Cfg.SpreadWeight.ToString("0.##", CultureInfo.InvariantCulture)}, level weight {Cfg.LevelWeight.ToString("0.##", CultureInfo.InvariantCulture)}, CommMgmt {(GameApi.HasCommMgmt ? "linked" : "absent")}."
                 + (_pins.Count > 0 ? " Pinned: " + string.Join(", ", _pins.Select(p => $"{GameApi.Short(p.Key)}: {p.Value.Name}")) + "." : ""));
+            GameApi.Say(caller, "Next pick: " + TierSummary(ConnectedCount()) + ".");
             bool pre;
             try { pre = strat.MissionState == GameModeExt.EMissionState.INIT && strat.TeamsVersus != GameModeExt.ETeamsVersus.NONE; } catch { pre = false; }
             if (pre)
@@ -248,9 +276,12 @@ namespace Si_EloMatchmaking
                 var seats = BuildSeats(strat);
                 var cands = CollectPool(strat, seats, consume: false);
                 if (cands.Count == 0) { GameApi.Say(caller, "No applicants yet."); return; }
-                GameApi.Say(caller, "Applicants: " + string.Join(", ", cands.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)} {Db.FormatShort(c.Steam)}{(c.Flex ? " flex" : "")}{(c.WaitBonus > 0 ? $"+{c.WaitBonus:0}w" : "")}")));
+                GameApi.Say(caller, "Applicants: " + string.Join(", ", cands.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)} {Db.FormatShort(c.Steam)}{(c.Flex ? " flex" : "")}{(c.Pass ? " pass" : "")}{(c.Streak > 0 ? $" streak{c.Streak}" : "")}{(c.WaitBonus > 0 ? $"+{c.WaitBonus:0}w" : "")}")));
+                cands = cands.ToList();
+                var tier = Window(ResolveTier(ConnectedCount(), out _));
+                Matchmaker.ApplyPass(seats, cands, Cfg, Rng, tier);
                 var fixedPicks = FixedPicks(strat, seats, cands, announceMissing: false);
-                var best = Matchmaker.Solve(seats, cands, Cfg, Rng, fixedPicks);
+                var best = Matchmaker.Solve(seats, cands, Cfg, Rng, fixedPicks, tier);
                 var parts = seats.Select((s, i) => $"{GameApi.Short(s.Faction)}: {(best.Picks[i] == null ? "AI" : best.Picks[i]!.Name)}{(fixedPicks != null && fixedPicks[i] != null ? " (pinned)" : "")}");
                 GameApi.Say(caller, "Projected: " + string.Join(" vs ", parts) + $" (mean {best.Mean:0}, spread {best.Spread:0})");
             }
