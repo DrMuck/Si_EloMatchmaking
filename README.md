@@ -21,39 +21,69 @@ against the default branch, git branch `test` against the test branch (see Build
   (10 min) of the end of a round their team lost is charged as if they had stayed to the end.
 - **Chat display.** Applicants with rating during the countdown, the matchup with win chances at
   round start, team mean player Elo at round start, rating changes at round end.
+- **Tier by player count (0.5.0).** On a small server anyone commands; from 10 players the pick
+  aims at mid-or-high rated commanders, from 20 at high rated ones (`TierByPlayers`, admin
+  `!elo tiers`). The tier is a cost, never a filter: a seat is always filled when anyone applied,
+  and when too few commanders of the tier apply the best available fill in (high vs mid is fine).
+  Players can vote the tier of the next round (`!elo vote`), an admin can force it (`!elo tier`).
+- **Rotation.** Each consecutive round in the seat adds a streak penalty, each round passed over
+  adds a wait bonus, so a strong pair keeps playing while nobody comparable applies and rotates
+  out within a few rounds once someone does. `!elo pass` lets a commander step aside whenever a
+  peer applies.
 - **Admin pins.** `!elo seat <faction> <player>` fixes a commander seat for the next round ahead of
   the pick, for organised matches (see Commands).
 
 ## Matchmaking objective
 
 ```
-score = mean(rating of seated commanders)
+score = LevelWeight * mean(rating of seated commanders)              (0.5)
       + wait bonus of each seated commander (rounds passed over * 60, capped at 420)
-      - SpreadWeight * spread
+      - SpreadWeight * spread                                          (1.0)
+      - TierWeight * sum over seated of max(0, distance from the tier window - sigma)   (1.0)
       - SwapPenalty per Sol<->Centauri move (30)
       - VolunteerPenalty per !flex volunteer on a foreign faction (60)
-      - RecentCommanderPenalty per commander of the previous round (30)
-      - NoCommanderPenalty per team with players left to the AI (400)
+      - min(150, 30 * streak) per commander seated in the previous `streak` consecutive rounds
+      - NoCommanderPenalty per team with players left to the AI (1500, dominates everything)
 
 spread = max over seated pairs of max(0, |Ri - Rj| - (sigma_i + sigma_j))
 sigma  = 200 at 0 games, 100 at 10 games, 50 at 30 games, floor 40
 ```
 
-`mean` prefers high-Elo matchups, `spread` prefers even ones; `SpreadWeight` (default 1.0) is the
-exchange rate. All assignments are enumerated. Ties between equal ratings are broken randomly.
+`mean` prefers strong commanders, `spread` prefers even matchups, the tier term pulls the pick into
+the band the server size asks for, streak and wait bonus rotate. All assignments are enumerated.
+Ties between equal ratings are broken randomly.
+
+**Tiers.** `any` has no window; `low` ends at the mid bound, `mid` lies between the two bounds,
+`midhigh` starts at the mid bound, `high` at the high bound. The bounds are the 34 % and 67 %
+quantiles of the established commander population (>= 5 games), or `TierMidRating` /
+`TierHighRating` when set. After a season reset everyone sits at 1500, so the tiers are inert until
+the ratings spread. The tier for a pick comes from, in this order: an admin `!elo tier` override
+(one round), a `!elo vote` with quorum (at least 3 ballots and a third of the players, plurality,
+one round), the `TierByPlayers` table by connected players (default `0=any,10=midhigh,20=high`).
+The countdown announces the tier when it is not `any`.
 
 **Newcomers and rotation.** A rating is uncertain until it has games behind it, so a gap is only
 penalised beyond what the two uncertainties can explain: a 1500? newcomer against an established
-1800 counts as a 50-point gap, not 300, and gets that match when nothing better is available. On top
-of that, every applicant who is passed over collects a wait bonus; a newcomer behind a 1900/1850
-pair displaces one of them after about 4-5 rounds (sooner, because both incumbents also carry the
-recent-commander penalty). Once seated, K = 60 for the first 10 games moves a good newcomer up fast.
-Rounds passed over are persisted in `ratings.json` (`waiting`) and shown by `!elo`.
+1800 counts as a 50-point gap, not 300, and gets that match when nothing better is available. Every
+applicant who is passed over collects a wait bonus (persisted in `ratings.json` as `waiting`), every
+commander who keeps the seat collects a streak penalty (`streak`); both are shown by `!elo`. The
+streak penalty is a deduction in the pick score only, ratings are never touched. Once seated,
+K = 60 for the first 10 games moves a good newcomer up fast.
 
-Examples (from the scenario harness): Sol applicants 1900 and 1500, Centauri 1500 -> 1500 vs 1500.
-Sol applicants 1900 and 1850, no Centauri applicant -> one is moved to Centauri, 1900 vs 1850.
-Sol newcomer 1500? and Centauri 1800 + 1500 -> newcomer vs 1800. Newcomer behind a 1900/1850 pair
--> the pair first, the newcomer vs 1850 once the wait bonus reaches 300.
+Measured in the scenario harness with the defaults, a 1900/1850 pair that keeps applying:
+
+| who else applies | tier any (small server) | tier high (full server) |
+|---|---|---|
+| nobody | the pair, every round | the pair, every round |
+| a 1700 | 1700 takes a seat after 2 rounds | a 1800 takes a seat after 1 round, a 1600 after 4 |
+| a 1550 | after 4 rounds | the pair stays (1600 after 4 rounds) |
+| a 1600 and a 1620 | both after 1 round | the pair stays |
+| a 1500? newcomer | after 4 rounds | with no second high applicant: newcomer vs 1900 |
+
+Other harness cases: high tier with one high and two mid applicants -> high vs mid; high tier with
+only mids -> the two best mids; mid-or-high tier with a 1900, a 1600 and a 1450 -> 1900 vs 1600; the
+same with only the 1900 and the 1450 -> 1900 vs 1450, never an AI seat; `!elo pass` on a 1900 steps
+aside for a 1800 peer, not for a 1600, and never when the AI would take the seat.
 
 ## Rating model (mirrored in `tools/compute_elo.py` and `RatingDb.cs`)
 
@@ -128,12 +158,16 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo top` | all | top 5 established commanders |
 | `!elo <name>` | all | look up a commander |
 | `!flex` / `!elo flex` | all | toggle "I take any commander seat, Alien included" (persisted) |
-| `!elo status` | all | applicant pool and projected matchup during the countdown |
+| `!elo pass` | all | toggle "seat someone else when a peer (within `PassGap` 150) would take my seat" (persisted) |
+| `!elo vote <any|low|mid|midhigh|high>` | all | vote the tier of the next commander matchup (needs a quorum, one round) |
+| `!elo status` | all | switches, next tier, applicant pool and projected matchup during the countdown |
 | `!elo on` / `off` (also `!elo matchmaking on\|off`) | admin (Commander power) | master switch; off = vanilla lottery, ratings still tracked |
 | `!elo reload` | admin | reload ratings.json |
 | `!elo reset confirm` | admin | new season: back up and wipe all ratings (for the 1.0 launch) |
 | `!elo set <name> <rating>` | admin | override a commander rating |
-| `!elo swap on/off`, `!elo volunteers on/off`, `!elo spread <w>` | admin | tune the objective |
+| `!elo swap on/off`, `!elo volunteers on/off`, `!elo spread <w>`, `!elo level <w>` | admin | tune the objective |
+| `!elo tier <tier>` / `!elo tier auto` | admin | force the tier of the next pick / back to vote + player count |
+| `!elo tiers 0=any,10=midhigh,20=high` | admin | the tier-by-player-count table (persisted in the config) |
 | `!elo seat <sol\|cent\|alien> <player>` | admin | pin this player as commander of that faction for the next round, ahead of the Elo pick (organised matches); `!elo seat` lists the pins |
 | `!elo unseat <faction>` / `!elo unseat all` | admin | drop a pin |
 
@@ -185,6 +219,8 @@ journal truncated. Load replays the journal (verified identical in a harness).
 - Player Elo is **report only**; nobody is moved for player balance (Si_BasicTeamBalance handles
   player counts; mixing two movers is risky).
 - Mid-round commander takeovers are left to the game (whoever presses Commander gets the empty seat).
+- 0.5.0 (2026-10-22, tiers / rotation / pass / vote) is verified in the scenario harness only; the
+  pick itself (seating, moves, CommManagement handover) is unchanged from 0.3.1.
 - Not yet through a full live round. First live start 2026-10-20 on 1.0.2: reflection targets
   resolved and a commander was seated. First start on the public 0.9.47 server the same evening
   (Admin Mod 2.14.18, CommManagement 1.9.15): mod loaded, but 0.3.0 found no applicants because of

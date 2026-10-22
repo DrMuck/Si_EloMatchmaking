@@ -75,6 +75,10 @@ namespace Si_EloMatchmaking
         public int rounds_live;
         /// <summary>Steam ID -> rounds this applicant was passed over since last seated (wait bonus). Mod-only field.</summary>
         public Dictionary<string, int> waiting = new Dictionary<string, int>();
+        /// <summary>Steam IDs with !elo pass on (step aside when a peer applies). Mod-only field.</summary>
+        public HashSet<string> pass = new HashSet<string>();
+        /// <summary>Steam ID -> consecutive rounds this commander was seated by the pick, ending with the last round. Mod-only field.</summary>
+        public Dictionary<string, int> streak = new Dictionary<string, int>();
         [JsonExtensionData] public IDictionary<string, JToken>? extra;
     }
 
@@ -154,6 +158,8 @@ namespace Si_EloMatchmaking
                 Data.players ??= new Dictionary<string, RatingEntry>();
                 Data.faction_adv ??= new Dictionary<string, double>();
                 Data.waiting ??= new Dictionary<string, int>();
+                Data.pass ??= new HashSet<string>();
+                Data.streak ??= new Dictionary<string, int>();
                 int replayed = ReplayJournal();
                 if (replayed > 0) _journalSaves = FullSaveEvery;   // compact on the next save
                 foreach (var e in Data.commanders.Values) e.EnsureBuckets();
@@ -192,6 +198,8 @@ namespace Si_EloMatchmaking
             public Dictionary<string, RatingEntry> players = new Dictionary<string, RatingEntry>();
             public HashSet<string> flex = new HashSet<string>();
             public Dictionary<string, int> waiting = new Dictionary<string, int>();
+            public HashSet<string>? pass;
+            public Dictionary<string, int>? streak;
         }
 
         public void Save()
@@ -218,6 +226,8 @@ namespace Si_EloMatchmaking
                     flex = new HashSet<string>(Data.flex),
                     rounds_live = Data.rounds_live,
                     waiting = new Dictionary<string, int>(Data.waiting),
+                    pass = new HashSet<string>(Data.pass),
+                    streak = new Dictionary<string, int>(Data.streak),
                     extra = Data.extra,
                 };
                 ThreadPool.QueueUserWorkItem(_ => RunSave(() => { lock (_fileLock) { WriteFull(path, snapshot); TruncateJournal(journal); } }));
@@ -231,6 +241,8 @@ namespace Si_EloMatchmaking
                     rounds_live = Data.rounds_live,
                     flex = new HashSet<string>(Data.flex),
                     waiting = new Dictionary<string, int>(Data.waiting),
+                    pass = new HashSet<string>(Data.pass),
+                    streak = new Dictionary<string, int>(Data.streak),
                 };
                 foreach (var k in _dirtyCommanders) if (Data.commanders.TryGetValue(k, out var c)) delta.commanders[k] = c;
                 foreach (var k in _dirtyPlayers) if (Data.players.TryGetValue(k, out var p)) delta.players[k] = p;
@@ -299,6 +311,8 @@ namespace Si_EloMatchmaking
                     foreach (var kv in d.players) Data.players[kv.Key] = kv.Value;
                     if (d.flex != null) Data.flex = d.flex;
                     if (d.waiting != null) Data.waiting = d.waiting;
+                    if (d.pass != null) Data.pass = d.pass;
+                    if (d.streak != null) Data.streak = d.streak;
                     if (d.rounds_live > Data.rounds_live) Data.rounds_live = d.rounds_live;
                     n++;
                 }
@@ -314,8 +328,9 @@ namespace Si_EloMatchmaking
             try { if (File.Exists(_path)) File.Copy(_path, backup, true); }
             catch (Exception ex) { MelonLogger.Error("[Elo] Backup before reset failed: " + ex.Message); }
             var keepFlex = Data.flex;
+            var keepPass = Data.pass;
             var keepAdv = Data.faction_adv;
-            Data = new RatingDbData { flex = keepFlex, faction_adv = keepAdv, generated = DateTime.UtcNow.ToString("o"), source = "season reset" };
+            Data = new RatingDbData { flex = keepFlex, pass = keepPass, faction_adv = keepAdv, generated = DateTime.UtcNow.ToString("o"), source = "season reset" };
             SaveNow();
             MelonLogger.Msg("[Elo] Season reset; backup at " + backup);
             return backup;
@@ -374,6 +389,27 @@ namespace Si_EloMatchmaking
             else { Data.flex.Add(steam); now = true; }
             Save();
             return now;
+        }
+
+        public bool IsPass(string steam) => Data.pass.Contains(steam);
+        public bool TogglePass(string steam)
+        {
+            bool now;
+            if (Data.pass.Contains(steam)) { Data.pass.Remove(steam); now = false; }
+            else { Data.pass.Add(steam); now = true; }
+            Save();
+            return now;
+        }
+
+        /// <summary>Consecutive rounds this commander was seated by the pick, ending with the previous round (0 = not seated last round).</summary>
+        public int Streak(string steam) => Data.streak.TryGetValue(steam, out var n) ? n : 0;
+
+        /// <summary>After a pick: seated commanders extend their streak, everyone else's streak ends.</summary>
+        public void UpdateStreaks(IEnumerable<string> seated)
+        {
+            var next = new Dictionary<string, int>();
+            foreach (var s in seated) next[s] = Streak(s) + 1;
+            Data.streak = next;
         }
 
         /// <summary>Entries sorted by rating, optionally only established ones.</summary>

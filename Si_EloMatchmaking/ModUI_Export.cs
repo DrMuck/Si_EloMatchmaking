@@ -50,6 +50,34 @@ namespace ModUI
             foreach (var p in values) if (!string.IsNullOrEmpty(p.text) && p.value != null) v[p.text] = p.value;
             return v.Count == 0 ? null : JsonConvert.SerializeObject(new JObject { ["v"] = v }, Formatting.None);
         }
+        // A table shown on the mod page above the command list: {"n":title,"h":[headers],"r":[[cells],...]}.
+        public ModUIExport Table(string name, string[] headers, params string[][] rows)
+        {
+            if (!(root["tables"] is JArray tables)) root["tables"] = tables = new JArray();
+            tables.Add(TableObject(name, headers, rows)); return this;
+        }
+        internal static JObject TableObject(string name, string[] headers, string[][] rows)
+        {
+            var r = new JArray(); foreach (var row in rows ?? new string[0][]) if (row != null) r.Add(new JArray(row));
+            return new JObject { ["n"] = name ?? "", ["h"] = new JArray(headers ?? new string[0]), ["r"] = r };
+        }
+        // Builder for `public static string ModUIPlayerData(ulong steamId)`: this player's own switch / value states and
+        // tables (a Leaderboard "my stats" grid). The server refreshes per-player data at most once a minute, or right
+        // after a command of that player.
+        public sealed class PlayerExport
+        {
+            private readonly JObject v = new JObject(); private readonly JArray tables = new JArray();
+            public PlayerExport Value(string text, string value) { if (!string.IsNullOrEmpty(text) && value != null) v[text] = value; return this; }
+            public PlayerExport Table(string name, string[] headers, params string[][] rows) { tables.Add(TableObject(name, headers, rows)); return this; }
+            public string Build()
+            {
+                var doc = new JObject();
+                if (v.Count > 0) doc["v"] = v;
+                if (tables.Count > 0) doc["tables"] = tables;
+                return doc.Count == 0 ? null : JsonConvert.SerializeObject(doc, Formatting.None);
+            }
+        }
+        public static PlayerExport ForPlayer() => new PlayerExport();
 
         // ---- plain button: sends `text` (plus the Arguments field, if the player typed one) ----
         public ModUIExport Action(string text, string label, string description, bool admin = false)

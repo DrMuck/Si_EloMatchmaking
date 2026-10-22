@@ -11,6 +11,11 @@
  - Shows the matchup with ratings and win chances in chat, and the rating changes at the end.
  - Admin pins (!elo seat <faction> <player>) fix a seat for the next round ahead of the pick
    (organised matches); Pins.cs. Pins.cs also exports the sub-commands to Si_ModUI.
+ - Rotation and tiers (Tiers.cs): the pick aims at a rating tier chosen by player count (small
+   server: anyone; fuller: mid or high; full: high), overridable for one round by a player vote
+   (!elo vote) or an admin (!elo tier). Consecutive rounds in the seat cost a growing streak
+   penalty, applicants passed over collect a wait bonus, and !elo pass lets a commander step
+   aside when a peer applies. Seats are always filled when anyone applied.
  - Leaver rule: a commander who drops out in the last 10 minutes of a lost round still takes
    the loss.
 
@@ -40,7 +45,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.4.4";
+        public const string Version = "0.5.0";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();
@@ -198,7 +203,9 @@ namespace Si_EloMatchmaking
                     Sigma = Db.Sigma(Db.CommanderGames(steam)),
                     WaitBonus = Db.WaitBonus(steam),
                     Flex = Db.IsFlex(steam),
-                    Recent = _lastRoundCommanders.Contains(steam),
+                    Pass = Db.IsPass(steam),
+                    Streak = Db.Streak(steam),
+                    Recent = Db.Streak(steam) > 0,
                     Source = source,
                 };
             }
@@ -220,6 +227,13 @@ namespace Si_EloMatchmaking
         {
             var seats = BuildSeats(strat);
             var cands = CollectPool(strat, seats, consume: true);
+            int players = ConnectedCount();
+            string tierName = ResolveTier(players, out string tierReason);
+            var tier = Window(tierName);
+            ClearTierState();   // votes and the admin override are for this one pick
+            var stepped = Matchmaker.ApplyPass(seats, cands, Cfg, Rng, tier);
+            foreach (var s in stepped)
+                GameApi.SayAll($"{GameApi.Colored(s.AppliedTeam, s.Name)} passes the commander seat this round (!elo pass): another applicant of similar rating is in.");
             var fixedPicks = FixedPicks(strat, seats, cands, announceMissing: true);
             _pins.Clear();   // one round only
             LastAssignment = null;
@@ -234,15 +248,16 @@ namespace Si_EloMatchmaking
                 return;
             }
 
-            var best = Matchmaker.Solve(seats, cands, Cfg, Rng, fixedPicks);
+            var best = Matchmaker.Solve(seats, cands, Cfg, Rng, fixedPicks, tier);
             LastAssignment = best;
             if (fixedPicks != null)
                 for (int i = 0; i < seats.Count; i++)
                     if (fixedPicks[i] != null) GameApi.SayAll($"Admin pick: {GameApi.Colored(seats[i].Team, fixedPicks[i]!.Name)} commands {GameApi.Short(seats[i].Faction)}.");
             if (Cfg.Debug)
             {
-                MelonLogger.Msg($"[Elo] Pool: " + string.Join(", ", cands.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)}={c.Rating:0}~{c.Sigma:0}+{c.WaitBonus:0}/{c.Games}g{(c.Flex ? " flex" : "")}[{c.Source}]")));
-                MelonLogger.Msg($"[Elo] Best: score={best.Score:0.0} mean={best.Mean:0} spread={best.Spread:0} swaps={best.Swaps} vols={best.Volunteers} unfilled={best.Unfilled}");
+                MelonLogger.Msg($"[Elo] Pool: " + string.Join(", ", cands.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)}={c.Rating:0}~{c.Sigma:0}+{c.WaitBonus:0}/{c.Games}g{(c.Flex ? " flex" : "")}{(c.Streak > 0 ? $" streak{c.Streak}" : "")}[{c.Source}]"))
+                                + $"; tier {tierName} ({tierReason}) window {tier.Low:0}..{tier.High:0}");
+                MelonLogger.Msg($"[Elo] Best: score={best.Score:0.0} mean={best.Mean:0} spread={best.Spread:0} tierCost={best.TierCost:0} swaps={best.Swaps} vols={best.Volunteers} unfilled={best.Unfilled}");
             }
 
             var seated = new List<(Seat seat, Candidate cand, bool moved)>();
@@ -267,20 +282,22 @@ namespace Si_EloMatchmaking
 
             // Applicants that were sent to "no role" by CommManagement at the end of the countdown
             // need a unit again; button applicants already have one.
-            foreach (var c in cands)
+            foreach (var c in cands.Concat(stepped))
                 if (!seated.Any(s => s.cand == c)) GameApi.RespawnIfUnitless(c.Player);
 
             _lastRoundCommanders = new HashSet<string>(seated.Select(s => s.cand.Steam));
+            Db.UpdateStreaks(_lastRoundCommanders);
             Db.UpdateWaiting(_lastRoundCommanders, cands.Where(c => !_lastRoundCommanders.Contains(c.Steam)).Select(c => c.Steam));
             Db.Save();
 
             MelonLogger.Msg("[Elo] Seated: " + string.Join(", ", seated.Select(s => $"{s.cand.Name}({s.cand.Rating:0}) -> {s.seat.Team.TeamShortName}{(s.moved ? " [moved]" : "")}")) +
-                            (best.Unfilled > 0 ? $"; {best.Unfilled} seat(s) AI" : ""));
+                            (best.Unfilled > 0 ? $"; {best.Unfilled} seat(s) AI" : "") + $"; tier {tierName} ({tierReason})" +
+                            (stepped.Count > 0 ? "; passed: " + string.Join(", ", stepped.Select(s => s.Name)) : ""));
 
-            if (Cfg.AnnounceMatchup) AnnounceMatchup(seats, seated);
+            if (Cfg.AnnounceMatchup) AnnounceMatchup(seats, seated, tierName, tierReason);
         }
 
-        static void AnnounceMatchup(List<Seat> seats, List<(Seat seat, Candidate cand, bool moved)> seated)
+        static void AnnounceMatchup(List<Seat> seats, List<(Seat seat, Candidate cand, bool moved)> seated, string tierName, string tierReason)
         {
             var parts = new List<string>();
             var ratings = new List<double>();
@@ -298,7 +315,7 @@ namespace Si_EloMatchmaking
                 ratings.Add(s.cand.Rating);
                 ratedSeats.Add(seat);
             }
-            GameApi.SayAll("Commander matchup: " + string.Join(" vs ", parts));
+            GameApi.SayAll("Commander matchup" + (tierName != "any" ? $" [{TierLabel(tierName)} tier, {tierReason}]" : "") + ": " + string.Join(" vs ", parts));
             if (ratings.Count >= 2)
             {
                 var p = RatingDb.WinProbabilities(ratings);
@@ -350,6 +367,7 @@ namespace Si_EloMatchmaking
                 _announcedApplicants.Clear();
                 _askedThisRound = false;
                 _preRoundPoll = 0f;
+                _announcedTier = "";
             }
             _preRoundPoll -= Time.deltaTime;
             if (_preRoundPoll > 0f) return;
@@ -358,6 +376,7 @@ namespace Si_EloMatchmaking
 
             var seats = BuildSeats(strat);
             var cands = CollectPool(strat, seats, consume: false);
+            AnnounceTier(ConnectedCount());
 
             if (Cfg.AnnounceApplicants)
             {
@@ -371,7 +390,7 @@ namespace Si_EloMatchmaking
 
             if (Cfg.AskExtendSeconds > 0 && !_askedThisRound && strat.Timer <= 6f && strat.Timer > 1.5f && seats.Count >= 2 && cands.Count > 0)
             {
-                var best = Matchmaker.Solve(seats, cands, Cfg, Rng);
+                var best = Matchmaker.Solve(seats, cands, Cfg, Rng, null, Window(ResolveTier(ConnectedCount(), out _)));
                 int filled = seats.Count - best.Unfilled;
                 if (best.Unfilled > 0 && cands.Count > filled)
                 {
