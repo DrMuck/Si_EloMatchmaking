@@ -69,8 +69,10 @@ namespace Si_EloMatchmaking
         public JToken? validation;
         public Dictionary<string, RatingEntry> commanders = new Dictionary<string, RatingEntry>();
         public Dictionary<string, RatingEntry> players = new Dictionary<string, RatingEntry>();
-        /// <summary>Steam IDs of players who accept any commander seat (!flex). Mod-only field.</summary>
+        /// <summary>Steam IDs of players who accept any commander seat (!flex / !flex on). Mod-only field.</summary>
         public HashSet<string> flex = new HashSet<string>();
+        /// <summary>Steam ID -> factions (besides the one applied for) this player accepts a seat on (!flex alien, !flex sol cent). Mod-only field.</summary>
+        public Dictionary<string, List<string>> flex_factions = new Dictionary<string, List<string>>();
         /// <summary>Rounds applied live by the mod (appended after the seed's rounds_scored).</summary>
         public int rounds_live;
         /// <summary>Steam ID -> rounds this applicant was passed over since last seated (wait bonus). Mod-only field.</summary>
@@ -154,6 +156,7 @@ namespace Si_EloMatchmaking
                 var d = JsonConvert.DeserializeObject<RatingDbData>(File.ReadAllText(_path));
                 Data = d ?? new RatingDbData();
                 Data.flex ??= new HashSet<string>();
+                Data.flex_factions ??= new Dictionary<string, List<string>>();
                 Data.commanders ??= new Dictionary<string, RatingEntry>();
                 Data.players ??= new Dictionary<string, RatingEntry>();
                 Data.faction_adv ??= new Dictionary<string, double>();
@@ -200,6 +203,7 @@ namespace Si_EloMatchmaking
             public Dictionary<string, int> waiting = new Dictionary<string, int>();
             public HashSet<string>? pass;
             public Dictionary<string, int>? streak;
+            public Dictionary<string, List<string>>? flex_factions;
         }
 
         public void Save()
@@ -224,6 +228,7 @@ namespace Si_EloMatchmaking
                     commanders = new Dictionary<string, RatingEntry>(Data.commanders),
                     players = new Dictionary<string, RatingEntry>(Data.players),
                     flex = new HashSet<string>(Data.flex),
+                    flex_factions = new Dictionary<string, List<string>>(Data.flex_factions),
                     rounds_live = Data.rounds_live,
                     waiting = new Dictionary<string, int>(Data.waiting),
                     pass = new HashSet<string>(Data.pass),
@@ -240,6 +245,7 @@ namespace Si_EloMatchmaking
                     t = DateTime.UtcNow.ToString("o"),
                     rounds_live = Data.rounds_live,
                     flex = new HashSet<string>(Data.flex),
+                    flex_factions = new Dictionary<string, List<string>>(Data.flex_factions),
                     waiting = new Dictionary<string, int>(Data.waiting),
                     pass = new HashSet<string>(Data.pass),
                     streak = new Dictionary<string, int>(Data.streak),
@@ -310,6 +316,7 @@ namespace Si_EloMatchmaking
                     foreach (var kv in d.commanders) Data.commanders[kv.Key] = kv.Value;
                     foreach (var kv in d.players) Data.players[kv.Key] = kv.Value;
                     if (d.flex != null) Data.flex = d.flex;
+                    if (d.flex_factions != null) Data.flex_factions = d.flex_factions;
                     if (d.waiting != null) Data.waiting = d.waiting;
                     if (d.pass != null) Data.pass = d.pass;
                     if (d.streak != null) Data.streak = d.streak;
@@ -328,9 +335,10 @@ namespace Si_EloMatchmaking
             try { if (File.Exists(_path)) File.Copy(_path, backup, true); }
             catch (Exception ex) { MelonLogger.Error("[Elo] Backup before reset failed: " + ex.Message); }
             var keepFlex = Data.flex;
+            var keepFlexFactions = Data.flex_factions;
             var keepPass = Data.pass;
             var keepAdv = Data.faction_adv;
-            Data = new RatingDbData { flex = keepFlex, pass = keepPass, faction_adv = keepAdv, generated = DateTime.UtcNow.ToString("o"), source = "season reset" };
+            Data = new RatingDbData { flex = keepFlex, flex_factions = keepFlexFactions, pass = keepPass, faction_adv = keepAdv, generated = DateTime.UtcNow.ToString("o"), source = "season reset" };
             SaveNow();
             MelonLogger.Msg("[Elo] Season reset; backup at " + backup);
             return backup;
@@ -389,6 +397,30 @@ namespace Si_EloMatchmaking
             else { Data.flex.Add(steam); now = true; }
             Save();
             return now;
+        }
+
+        public static readonly string[] AllFactions = { "Sol", "Centauri", "Alien" };
+
+        /// <summary>Factions this player accepts a seat on besides the one applied for; null = none (flex off), or "any" via IsFlex.</summary>
+        public List<string>? FlexFactions(string steam) => Data.flex_factions.TryGetValue(steam, out var l) && l != null && l.Count > 0 ? l : null;
+
+        /// <summary>Set the flex preference: null/empty = off, all three factions = any, else that set. Returns the label.</summary>
+        public string SetFlex(string steam, IEnumerable<string>? factions)
+        {
+            var set = (factions ?? Enumerable.Empty<string>()).Where(f => Array.IndexOf(AllFactions, f) >= 0).Distinct().OrderBy(f => Array.IndexOf(AllFactions, f)).ToList();
+            Data.flex.Remove(steam);
+            Data.flex_factions.Remove(steam);
+            if (set.Count >= AllFactions.Length) Data.flex.Add(steam);
+            else if (set.Count > 0) Data.flex_factions[steam] = set;
+            Save();
+            return FlexLabel(steam);
+        }
+
+        public string FlexLabel(string steam)
+        {
+            if (Data.flex.Contains(steam)) return "any";
+            var l = FlexFactions(steam);
+            return l == null ? "off" : string.Join("+", l.Select(f => f == "Centauri" ? "Cent" : f));
         }
 
         public bool IsPass(string steam) => Data.pass.Contains(steam);

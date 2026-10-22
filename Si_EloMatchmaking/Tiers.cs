@@ -106,13 +106,24 @@ namespace Si_EloMatchmaking
             try { return GameApi.ConnectedPlayers().Count(); } catch { return 0; }
         }
 
-        /// <summary>Tier for the next pick: admin override, else a vote with quorum, else the player-count table.</summary>
+        /// <summary>Players connected at the end of the previous round (set in OnRoundEnded; 0 after a server start).</summary>
+        static int _prevRoundPlayers;
+
+        /// <summary>Player count the tier table is read with: the larger of "now" and "end of the previous round"
+        /// (TierPlayersUsePreviousRound), because the countdown runs right after the map change while players still load.</summary>
+        public static int TierPlayerCount()
+        {
+            int now = ConnectedCount();
+            return Cfg.TierPlayersUsePreviousRound ? Math.Max(now, _prevRoundPlayers) : now;
+        }
+
+        /// <summary>Tier for the next pick: admin override, else a vote with quorum (quorum on the players connected now), else the player-count table.</summary>
         public static string ResolveTier(int players, out string reason)
         {
             if (_tierOverride != null) { reason = "set by " + _tierOverrideBy; return _tierOverride; }
-            var v = VoteResult(players);
+            var v = VoteResult(ConnectedCount());
             if (v.winner != null && v.votes >= v.needed) { reason = $"voted {v.top} of {v.votes}"; return v.winner; }
-            reason = $"{players} players";
+            reason = $"{players} players" + (players > ConnectedCount() ? " at the end of last round" : "");
             return PlayerCountTier(players);
         }
 
@@ -169,7 +180,7 @@ namespace Si_EloMatchmaking
             if (arg.Length == 0)
             {
                 var v0 = VoteResult(players);
-                GameApi.Say(caller, $"Vote the Elo tier of the next commander matchup: !elo vote any|low|mid|midhigh|high. Votes: {VoteTally()} (needs {v0.needed} of {players}). Without a winning vote: {TierLabel(PlayerCountTier(players))} by player count.");
+                GameApi.Say(caller, $"Vote the Elo tier of the next commander matchup: !elo vote any|low|mid|midhigh|high. Votes: {VoteTally()} (needs {v0.needed} of {players}). Without a winning vote: {TierLabel(PlayerCountTier(TierPlayerCount()))} by player count.");
                 return;
             }
             string? tier = ParseTier(arg);
@@ -185,7 +196,7 @@ namespace Si_EloMatchmaking
         static void HandleTier(Player? caller, string rest)
         {
             string arg = (rest ?? "").Trim();
-            int players = ConnectedCount();
+            int players = TierPlayerCount();
             if (arg.Length == 0) { GameApi.Say(caller, "Next pick: " + TierSummary(players) + ". Usage: !elo tier any|low|mid|midhigh|high|auto"); return; }
             if (arg.Equals("auto", StringComparison.OrdinalIgnoreCase))
             {

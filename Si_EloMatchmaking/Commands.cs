@@ -4,7 +4,8 @@
    !elo                      your commander / player rating
    !elo top                  top 5 commanders (>= ProvisionalGames)
    !elo <name>               look up a commander
-   !elo flex   or  !flex     toggle: "I take any commander seat, Alien included" (persisted)
+   !elo flex   or  !flex     toggle: "I take any commander seat, Alien included" (persisted per Steam ID)
+   !flex alien | sol cent | humans | on | off   the factions you accept a seat on besides your own
    !elo pass [on|off]        toggle: "seat someone else if another applicant of similar rating applies" (persisted; Tiers.cs)
    !elo vote <tier>          vote the Elo tier of the next commander matchup (any|low|mid|midhigh|high; Tiers.cs)
    !elo status               current applicant pool, next tier and the matchup it would produce
@@ -26,6 +27,7 @@
 using MelonLoader;
 using SilicaAdminMod;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 
@@ -53,27 +55,53 @@ namespace Si_EloMatchmaking
             try { return caller.CanAdminExecute(Power.Commander); } catch { return false; }
         }
 
+        // !flex            toggle any <-> off
+        // !flex on|off     any seat / none (Si_ModUI switch row)
+        // !flex alien      Alien only;  !flex sol cent / !flex humans  the two human factions;  any combination
+        // The set lists the factions you accept a seat on besides the one you applied for. An explicit set also
+        // limits the Sol/Centauri swap for you ("Sol or Alien only" is expressible). Stored per Steam ID on the server.
         static void OnFlexCommand(Player? caller, string args)
         {
             if (caller == null) { GameApi.Say(null, "!flex is a player command."); return; }
-            // "!flex on|off" (Si_ModUI switch row) sets the state; bare "!flex" toggles as before.
-            var parts = (args ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            string want = parts.Length > 1 ? parts[1].ToLowerInvariant() : "";
-            if (want == "on" || want == "off")
+            var parts = (args ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).Skip(1).Select(p => p.ToLowerInvariant()).ToList();
+            if (parts.Count == 0) { ToggleFlex(caller); return; }
+            string steam = GameApi.SteamId(caller);
+            List<string>? set;
+            if (parts[0] == "on" || parts[0] == "any" || parts[0] == "all") set = RatingDb.AllFactions.ToList();
+            else if (parts[0] == "off" || parts[0] == "none") set = null;
+            else
             {
-                bool wantOn = want == "on";
-                if (Db.IsFlex(GameApi.SteamId(caller)) == wantOn) { GameApi.Say(caller, "Flex is already " + (wantOn ? "ON" : "OFF") + "."); return; }
+                set = new List<string>();
+                foreach (var p in parts)
+                {
+                    if (p == "humans" || p == "human") { set.Add("Sol"); set.Add("Centauri"); continue; }
+                    string? f = ParseFaction(p);
+                    if (f == null) { GameApi.Say(caller, "Usage: !flex (toggle) | !flex on | !flex off | !flex alien | !flex sol cent | !flex humans. Lists the factions you accept a commander seat on besides your own."); return; }
+                    set.Add(f);
+                }
             }
-            ToggleFlex(caller);
+            string before = Db.FlexLabel(steam);
+            string label = Db.SetFlex(steam, set);
+            if (label == before) { GameApi.Say(caller, "Flex is already " + label.ToUpperInvariant() + "."); return; }
+            SayFlex(caller, label);
         }
 
         static void ToggleFlex(Player caller)
         {
-            bool now = Db.ToggleFlex(GameApi.SteamId(caller));
-            GameApi.Say(caller, now
-                ? "Flex ON: you may be seated as commander of any faction (Alien included) when that gives the best matchup. !flex again to turn off."
-                : "Flex OFF: you are only seated on the faction you applied for (Sol/Centauri may still be swapped).");
-            if (now && _preRoundActive) GameApi.SayAll($"{GameApi.Colored(caller.Team, caller.PlayerName)} volunteers for any commander seat.");
+            string steam = GameApi.SteamId(caller);
+            SayFlex(caller, Db.SetFlex(steam, Db.IsFlex(steam) ? null : RatingDb.AllFactions));
+        }
+
+        static void SayFlex(Player caller, string label)
+        {
+            switch (label)
+            {
+                case "any": GameApi.Say(caller, "Flex ANY: you may be seated as commander of any faction (Alien included) when that gives the best matchup. !flex again to turn off."); break;
+                case "off": GameApi.Say(caller, "Flex OFF: you are only seated on the faction you applied for (the Sol/Centauri swap still applies when the server allows it)."); break;
+                default: GameApi.Say(caller, $"Flex {label}: besides your own faction you may be seated on {label.Replace("+", " or ")} only; you are not moved anywhere else."); break;
+            }
+            if (label != "off" && _preRoundActive)
+                GameApi.SayAll($"{GameApi.Colored(caller.Team, caller.PlayerName)} volunteers for " + (label == "any" ? "any commander seat." : $"a {label.Replace("+", "/")} commander seat."));
         }
 
         static void OnEloCommand(Player? caller, string args)
@@ -248,7 +276,7 @@ namespace Si_EloMatchmaking
             string cm = c == null ? $"no commander games yet (start {Cfg.StartRating:0})" : Describe(steam, c);
             string pl = p == null ? "no rated rounds" : $"{p.rating:0} in {p.games} rounds";
             GameApi.Say(caller, $"Commander: {cm}");
-            GameApi.Say(caller, $"Player: {pl}" + (Db.IsFlex(steam) ? " | flex ON" : " | flex off (!flex to accept any seat)") + (Db.IsPass(steam) ? " | pass ON" : "")
+            GameApi.Say(caller, $"Player: {pl} | flex {Db.FlexLabel(steam)}" + (Db.FlexLabel(steam) == "off" ? " (!flex = any seat, !flex alien = Alien only)" : "") + (Db.IsPass(steam) ? " | pass ON" : "")
                 + (Db.Streak(steam) > 0 ? $" | commanded the last {Db.Streak(steam)} round(s), streak penalty -{Matchmaker.StreakPenalty(Db.Streak(steam), Cfg):0}" : "")
                 + (Db.WaitingRounds(steam) > 0 ? $" | passed over {Db.WaitingRounds(steam)}x, seating bonus +{Db.WaitBonus(steam):0}" : ""));
         }
@@ -268,7 +296,7 @@ namespace Si_EloMatchmaking
             if (strat == null) { GameApi.Say(caller, "No strategy game mode active."); return; }
             GameApi.Say(caller, $"Matchmaking {(Cfg.Enabled ? "ON" : "OFF")}, swap {(Cfg.AllowHumanFactionSwap ? "on" : "off")}, volunteers {(Cfg.AllowVolunteers ? "on" : "off")}, spread weight {Cfg.SpreadWeight.ToString("0.##", CultureInfo.InvariantCulture)}, level weight {Cfg.LevelWeight.ToString("0.##", CultureInfo.InvariantCulture)}, CommMgmt {(GameApi.HasCommMgmt ? "linked" : "absent")}."
                 + (_pins.Count > 0 ? " Pinned: " + string.Join(", ", _pins.Select(p => $"{GameApi.Short(p.Key)}: {p.Value.Name}")) + "." : ""));
-            GameApi.Say(caller, "Next pick: " + TierSummary(ConnectedCount()) + ".");
+            GameApi.Say(caller, "Next pick: " + TierSummary(TierPlayerCount()) + ".");
             bool pre;
             try { pre = strat.MissionState == GameModeExt.EMissionState.INIT && strat.TeamsVersus != GameModeExt.ETeamsVersus.NONE; } catch { pre = false; }
             if (pre)
@@ -278,7 +306,7 @@ namespace Si_EloMatchmaking
                 if (cands.Count == 0) { GameApi.Say(caller, "No applicants yet."); return; }
                 GameApi.Say(caller, "Applicants: " + string.Join(", ", cands.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)} {Db.FormatShort(c.Steam)}{(c.Flex ? " flex" : "")}{(c.Pass ? " pass" : "")}{(c.Streak > 0 ? $" streak{c.Streak}" : "")}{(c.WaitBonus > 0 ? $"+{c.WaitBonus:0}w" : "")}")));
                 cands = cands.ToList();
-                var tier = Window(ResolveTier(ConnectedCount(), out _));
+                var tier = Window(ResolveTier(TierPlayerCount(), out _));
                 Matchmaker.ApplyPass(seats, cands, Cfg, Rng, tier);
                 var fixedPicks = FixedPicks(strat, seats, cands, announceMissing: false);
                 var best = Matchmaker.Solve(seats, cands, Cfg, Rng, fixedPicks, tier);

@@ -37,7 +37,10 @@ namespace Si_EloMatchmaking
         public double Sigma;
         /// <summary>Seating bonus from rounds passed over (rotation guarantee).</summary>
         public double WaitBonus;
+        /// <summary>!flex on: accepts any seat.</summary>
         public bool Flex;
+        /// <summary>!flex alien / !flex sol cent: the factions accepted besides the one applied for (null = none). Also limits the Sol/Centauri swap for this player.</summary>
+        public List<string>? FlexFactions;
         /// <summary>!elo pass: steps aside when a peer applies (ApplyPass).</summary>
         public bool Pass;
         /// <summary>Consecutive rounds this applicant was seated by the pick, ending with the previous round (0 = not last round).</summary>
@@ -87,11 +90,14 @@ namespace Si_EloMatchmaking
     {
         enum Kind { Own, Swap, Volunteer }
 
+        static bool Accepts(Candidate c, string faction) => c.Flex || (c.FlexFactions != null && c.FlexFactions.Contains(faction));
+
         static Kind? Eligibility(Seat seat, Candidate c, EloConfig cfg)
         {
             if (ReferenceEquals(c.AppliedTeam, seat.Team)) return Kind.Own;   // same Team instance (avoids Unity's fake-null ==)
-            if (cfg.AllowHumanFactionSwap && GameApi.IsHumanFaction(seat.Faction) && GameApi.IsHumanFaction(c.AppliedFaction)) return Kind.Swap;
-            if (cfg.AllowVolunteers && c.Flex) return Kind.Volunteer;
+            if (cfg.AllowHumanFactionSwap && GameApi.IsHumanFaction(seat.Faction) && GameApi.IsHumanFaction(c.AppliedFaction)
+                && (c.FlexFactions == null || Accepts(c, seat.Faction))) return Kind.Swap;   // an explicit flex set also limits the swap
+            if (cfg.AllowVolunteers && Accepts(c, seat.Faction)) return Kind.Volunteer;
             return null;
         }
 

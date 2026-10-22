@@ -129,7 +129,7 @@ namespace Si_EloMatchmaking
                     {
                         Player = player, Steam = kv.Value.Steam, Name = player.PlayerName ?? kv.Value.Name,
                         Rating = Db.CommanderRating(kv.Value.Steam), Games = Db.CommanderGames(kv.Value.Steam), Sigma = Db.Sigma(Db.CommanderGames(kv.Value.Steam)),
-                        WaitBonus = Db.WaitBonus(kv.Value.Steam), Flex = Db.IsFlex(kv.Value.Steam), Streak = Db.Streak(kv.Value.Steam), Recent = Db.Streak(kv.Value.Steam) > 0, Source = "pinned",
+                        WaitBonus = Db.WaitBonus(kv.Value.Steam), Flex = Db.IsFlex(kv.Value.Steam), FlexFactions = Db.FlexFactions(kv.Value.Steam), Streak = Db.Streak(kv.Value.Steam), Recent = Db.Streak(kv.Value.Steam) > 0, Source = "pinned",
                     };
                     cands.Add(cand);
                 }
@@ -155,11 +155,24 @@ namespace Si_EloMatchmaking
             {
                 string steam = steamId.ToString();
                 return ModUI.ModUIExport.PlayerValues(
-                    ("/flex", Db != null && Db.IsFlex(steam) ? "on" : "off"),
+                    ("/flex", Db == null ? "off" : FlexSwitchValue(Db.FlexLabel(steam))),
                     ("/elo pass", Db != null && Db.IsPass(steam) ? "on" : "off"),
                     ("/elo vote", _tierVotes.TryGetValue(steam, out var v) ? v : ""));
             }
             catch (Exception ex) { MelonLogger.Warning("[Elo] ModUIPlayerData: " + ex.Message); return null; }
+        }
+
+        /// <summary>FlexLabel -> the /flex switch value it corresponds to ("" when the set matches no switch choice).</summary>
+        static string FlexSwitchValue(string label)
+        {
+            switch (label)
+            {
+                case "any": return "on";
+                case "off": return "off";
+                case "Alien": return "alien";
+                case "Sol+Cent": return "humans";
+                default: return "";
+            }
         }
 
         public static string? ModUIData()
@@ -170,12 +183,12 @@ namespace Si_EloMatchmaking
                     .Enabled(Cfg.Enabled)
                     .Info($"Matchmaking {(Cfg.Enabled ? "ON" : "OFF")} | Sol-Centauri swap {(Cfg.AllowHumanFactionSwap ? "on" : "off")} | flex volunteers {(Cfg.AllowVolunteers ? "on" : "off")} | spread weight {Cfg.SpreadWeight.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}")
                     .Info((_pins.Count == 0 ? "no pinned commanders" : "pinned: " + string.Join(", ", _pins.Select(p => $"{GameApi.Short(p.Key)} {p.Value.Name}"))) + " (pins apply to the next round start, even while matchmaking is OFF)")
-                    .Info("Next pick: " + TierSummary(ConnectedCount()))
+                    .Info("Next pick: " + TierSummary(TierPlayerCount()))
                     .Action("/elo", "My rating", "Your commander and player Elo, flex/pass state, streak and seating bonus.")
                     .Action("/elo top", "Top commanders", "The five best established commanders.")
                     .Action("/elo status", "Status", "Switches and the next tier; during the countdown the applicant pool and the projected matchup.")
                     // Per-player state: the shared export has no current value; ModUIPlayerData fills it per player.
-                    .Switch("/flex", "Flex", "Accept any commander seat, Alien included, when that gives the best matchup. Your own setting, remembered across sessions.", admin: false, current: "", ("on", "ON"), ("off", "OFF"))
+                    .Switch("/flex", "Flex", "Which other factions' commander seat you accept when that gives the best matchup: ANY (Alien included), Alien only, the two human factions, or none. Your own setting, remembered across sessions.", admin: false, current: "", ("on", "ANY"), ("alien", "Alien"), ("humans", "Sol+Cent"), ("off", "OFF"))
                     .Switch("/elo pass", "Pass", "Still apply, but step aside when another applicant of similar rating applies for your seat. Your own setting, remembered across sessions.", admin: false, current: "", ("on", "ON"), ("off", "OFF"))
                     .Switch("/elo vote", "Vote next tier", "Vote which Elo tier the next commander matchup aims for (needs a quorum; an admin setting wins).", admin: false, current: "", ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))
                     .Switch("/elo tier", "Next tier", "Force the tier of the next commander pick; AUTO = by vote, else by player count.", admin: true, current: _tierOverride ?? "auto", ("auto", "AUTO"), ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))
