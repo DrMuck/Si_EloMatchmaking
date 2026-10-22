@@ -155,24 +155,18 @@ namespace Si_EloMatchmaking
             {
                 string steam = steamId.ToString();
                 return ModUI.ModUIExport.PlayerValues(
-                    ("/flex", Db == null ? "off" : FlexSwitchValue(Db.FlexLabel(steam))),
+                    ("/flex", Db == null ? "" : FlexSwitchValue(steam)),
                     ("/elo pass", Db != null && Db.IsPass(steam) ? "on" : "off"),
                     ("/elo vote", _tierVotes.TryGetValue(steam, out var v) ? v : ""));
             }
             catch (Exception ex) { MelonLogger.Warning("[Elo] ModUIPlayerData: " + ex.Message); return null; }
         }
 
-        /// <summary>FlexLabel -> the /flex switch value it corresponds to ("" when the set matches no switch choice).</summary>
-        static string FlexSwitchValue(string label)
+        /// <summary>The /flex multi-select row value: the accepted factions as "sol,cent,alien" tokens ("" = off).</summary>
+        static string FlexSwitchValue(string steam)
         {
-            switch (label)
-            {
-                case "any": return "on";
-                case "off": return "off";
-                case "Alien": return "alien";
-                case "Sol+Cent": return "humans";
-                default: return "";
-            }
+            var set = Db.IsFlex(steam) ? RatingDb.AllFactions.ToList() : (Db.FlexFactions(steam) ?? new List<string>());
+            return string.Join(",", set.Select(f => f == "Sol" ? "sol" : f == "Centauri" ? "cent" : "alien"));
         }
 
         public static string? ModUIData()
@@ -188,7 +182,7 @@ namespace Si_EloMatchmaking
                     .Action("/elo top", "Top commanders", "The five best established commanders.")
                     .Action("/elo status", "Status", "Switches and the next tier; during the countdown the applicant pool and the projected matchup.")
                     // Per-player state: the shared export has no current value; ModUIPlayerData fills it per player.
-                    .Switch("/flex", "Flex", "Which other factions' commander seat you accept when that gives the best matchup: ANY (Alien included), Alien only, the two human factions, or none. Your own setting, remembered across sessions.", admin: false, current: "", ("on", "ANY"), ("alien", "Alien"), ("humans", "Sol+Cent"), ("off", "OFF"))
+                    .Multi("/flex", "Flex", "The factions whose commander seat you accept besides your own when that gives the best matchup; click a faction to add or remove it. Your own setting, remembered across sessions.", admin: false, current: "", ("sol", "Sol"), ("cent", "Centauri"), ("alien", "Alien"))
                     .Switch("/elo pass", "Pass", "Still apply, but step aside when another applicant of similar rating applies for your seat. Your own setting, remembered across sessions.", admin: false, current: "", ("on", "ON"), ("off", "OFF"))
                     .Switch("/elo vote", "Vote next tier", "Vote which Elo tier the next commander matchup aims for (needs a quorum; an admin setting wins).", admin: false, current: "", ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))
                     .Switch("/elo tier", "Next tier", "Force the tier of the next commander pick; AUTO = by vote, else by player count.", admin: true, current: _tierOverride ?? "auto", ("auto", "AUTO"), ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))

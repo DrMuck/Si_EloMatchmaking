@@ -55,9 +55,11 @@ namespace Si_EloMatchmaking
             try { return caller.CanAdminExecute(Power.Commander); } catch { return false; }
         }
 
-        // !flex            toggle any <-> off
-        // !flex on|off     any seat / none (Si_ModUI switch row)
-        // !flex alien      Alien only;  !flex sol cent / !flex humans  the two human factions;  any combination
+        // !flex                  toggle any <-> off
+        // !flex on|off           any seat / none
+        // !flex alien            toggle one faction in your set (the Si_ModUI faction buttons send this form)
+        // !flex alien on|off     add / remove one faction explicitly
+        // !flex sol cent         set exactly these factions;  "humans" = sol cent
         // The set lists the factions you accept a seat on besides the one you applied for. An explicit set also
         // limits the Sol/Centauri swap for you ("Sol or Alien only" is expressible). Stored per Steam ID on the server.
         static void OnFlexCommand(Player? caller, string args)
@@ -66,18 +68,29 @@ namespace Si_EloMatchmaking
             var parts = (args ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).Skip(1).Select(p => p.ToLowerInvariant()).ToList();
             if (parts.Count == 0) { ToggleFlex(caller); return; }
             string steam = GameApi.SteamId(caller);
+            const string usage = "Usage: !flex (toggle) | !flex on | !flex off | !flex alien (toggle Alien) | !flex alien on|off | !flex sol cent | !flex humans. The factions you accept a commander seat on besides your own.";
             List<string>? set;
             if (parts[0] == "on" || parts[0] == "any" || parts[0] == "all") set = RatingDb.AllFactions.ToList();
             else if (parts[0] == "off" || parts[0] == "none") set = null;
             else
             {
-                set = new List<string>();
+                bool? explicitOn = null;
+                if (parts[parts.Count - 1] == "on" || parts[parts.Count - 1] == "off") { explicitOn = parts[parts.Count - 1] == "on"; parts.RemoveAt(parts.Count - 1); }
+                var listed = new List<string>();
                 foreach (var p in parts)
                 {
-                    if (p == "humans" || p == "human") { set.Add("Sol"); set.Add("Centauri"); continue; }
+                    if (p == "humans" || p == "human") { listed.Add("Sol"); listed.Add("Centauri"); continue; }
                     string? f = ParseFaction(p);
-                    if (f == null) { GameApi.Say(caller, "Usage: !flex (toggle) | !flex on | !flex off | !flex alien | !flex sol cent | !flex humans. Lists the factions you accept a commander seat on besides your own."); return; }
-                    set.Add(f);
+                    if (f == null) { GameApi.Say(caller, usage); return; }
+                    listed.Add(f);
+                }
+                if (listed.Count == 0) { GameApi.Say(caller, usage); return; }
+                var current = Db.IsFlex(steam) ? RatingDb.AllFactions.ToList() : (Db.FlexFactions(steam) ?? new List<string>());
+                if (explicitOn == null && listed.Count > 1) set = listed;                                     // "!flex sol cent" sets
+                else
+                {
+                    bool add = explicitOn ?? !current.Contains(listed[0]);                                      // single faction: toggle
+                    set = add ? current.Concat(listed).ToList() : current.Where(f => !listed.Contains(f)).ToList();
                 }
             }
             string before = Db.FlexLabel(steam);
