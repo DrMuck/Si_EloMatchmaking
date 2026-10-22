@@ -88,6 +88,42 @@ only mids -> the two best mids; mid-or-high tier with a 1900, a 1600 and a 1450 
 same with only the 1900 and the 1450 -> 1900 vs 1450, never an AI seat; `!elo pass` on a 1900 steps
 aside for a 1800 peer, not for a 1600, and never when the AI would take the seat.
 
+## Team balance (0.6.0, `TeamBalance.cs`)
+
+Si_BasicTeamBalance decides team joins in a Harmony prefix on `MP_Strategy.ProcessNetRPC` and
+consumes the packet, so a second mod cannot look at the same request. This mod therefore takes the
+join handling over: at start-up it removes Si_BasicTeamBalance's prefix on that one method (its
+tower-defense handling and its `!team` admin command stay), applies the same head-count rule with
+Si_BasicTeamBalance's own MelonPreferences values (one config for the counts), and adds:
+
+- **Elo-aware placement, fresh joiners only, early only.** During the countdown and the first
+  `BalanceEloWindowSeconds` (60) of a round, when every team has at least
+  `BalanceEloMinPlayersPerTeam` (4) players, a joiner without a team whose pick would push the gap
+  in mean player Elo above `BalanceEloGapMax` (60) is placed on the count-eligible team that closes
+  the gap most, with a one-line reason. Players who already have a team are never redirected for
+  Elo, and nobody is moved during a round. After the window only the head-count rule applies.
+- **Head counts after the join.** A join may not leave the target team more than the allowed
+  difference ahead of the smallest team, checked after the join (one player stricter than
+  Si_BasicTeamBalance, which checks before). Allowed difference = `ceil(players / divisor + addend)`.
+- **Volunteer ask.** Every `BalanceAskIntervalSeconds` (180) during a round, when a team is short by
+  two or more or weaker by more than the Elo gap, chat asks for volunteers.
+- **`!reserve <team>`.** Queue for a spot on another team; `!reserve off` leaves, `!reserve` shows
+  the queue. Every 2 s the first in line whose move keeps the counts legal and does not widen the
+  Elo gap past the limit is moved, at their next respawn (`BalanceReserveAtRespawnOnly`), so no unit
+  is destroyed under them. The list is cleared at round start and end.
+
+`!elo balance` shows the state (mean player Elo per team, allowed difference, whether Elo placement
+is active); `!elo balance on|off` (admin) is the master switch. `BalanceTakeOverJoinHandling=false`
+leaves Si_BasicTeamBalance's join handling in place and keeps only the ask and `!reserve`.
+
+Harness cases (`BalanceRule`, defaults, allowed difference 1): a fresh joiner asking the fuller team
+(5 vs 4) goes to the smaller one; equal counts keep the pick; a switcher into the fuller team is
+denied, into the smaller one allowed; a 1800 joiner asking the already stronger side (1560 vs 1480,
+5 each) is placed on the weaker side, asking the weaker side is fine, and a 1300 joiner asking the
+strong side is fine (closes the gap); outside the window or below 4 per team the pick stands; a
+switcher is never redirected for Elo; a reserve move waits while the target is not smaller and while
+a 1900 would widen the gap, and goes through when it closes it.
+
 ## Rating model (mirrored in `tools/compute_elo.py` and `RatingDb.cs`)
 
 - Start 1500, K = 60 for the first 10 games, 24 afterwards (60 validated slightly better than 40
@@ -165,12 +201,15 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo pass` | all | toggle "seat someone else when a peer (within `PassGap` 150) would take my seat" (persisted) |
 | `!elo vote <any|low|mid|midhigh|high>` | all | vote the tier of the next commander matchup (needs a quorum, one round) |
 | `!elo status` | all | switches, next tier, applicant pool and projected matchup during the countdown |
+| `!elo balance` | all | team balance state: mean player Elo per team, allowed head-count difference, Elo placement active? |
+| `!reserve <sol|cent|alien>` / `!reserve off` / `!reserve` | all | queue for a spot on another team, moved at the next respawn once counts and Elo allow it |
 | `!elo on` / `off` (also `!elo matchmaking on\|off`) | admin (Commander power) | master switch; off = vanilla lottery, ratings still tracked |
 | `!elo reload` | admin | reload ratings.json |
 | `!elo reset confirm` | admin | new season: back up and wipe all ratings (for the 1.0 launch) |
 | `!elo set <name> <rating>` | admin | override a commander rating |
 | `!elo swap on/off`, `!elo volunteers on/off`, `!elo spread <w>`, `!elo level <w>` | admin | tune the objective |
 | `!elo tier <tier>` / `!elo tier auto` | admin | force the tier of the next pick / back to vote + player count |
+| `!elo balance on|off` | admin | team balance master switch |
 | `!elo tiers 0=any,10=midhigh,20=high` | admin | the tier-by-player-count table (persisted in the config) |
 | `!elo seat <sol\|cent\|alien> <player>` | admin | pin this player as commander of that faction for the next round, ahead of the Elo pick (organised matches); `!elo seat` lists the pins |
 | `!elo unseat <faction>` / `!elo unseat all` | admin | drop a pin |
@@ -220,8 +259,11 @@ journal truncated. Load replays the journal (verified identical in a harness).
 
 ## Known limits / not done
 
-- Player Elo is **report only**; nobody is moved for player balance (Si_BasicTeamBalance handles
-  player counts; mixing two movers is risky).
+- Player Elo balance only acts on fresh joiners at round start and on `!reserve` volunteers; nobody
+  is moved against their choice. Si_BasicTeamBalance's join prefix is removed at start-up when
+  `BalanceTakeOverJoinHandling` is on (see Team balance).
+- The join takeover is harness-tested for the rule and reference-checked for the API, but the live
+  packet path (read, clear request, placement) has not been exercised in game yet.
 - Mid-round commander takeovers are left to the game (whoever presses Commander gets the empty seat).
 - 0.5.0 (2026-10-22, tiers / rotation / pass / vote) is verified in the scenario harness only; the
   pick itself (seating, moves, CommManagement handover) is unchanged from 0.3.1.

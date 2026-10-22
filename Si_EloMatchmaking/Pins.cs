@@ -187,6 +187,9 @@ namespace Si_EloMatchmaking
                     .Switch("/elo vote", "Vote next tier", "Vote which Elo tier the next commander matchup aims for (needs a quorum; an admin setting wins).", admin: false, current: "", ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))
                     .Switch("/elo tier", "Next tier", "Force the tier of the next commander pick; AUTO = by vote, else by player count.", admin: true, current: _tierOverride ?? "auto", ("auto", "AUTO"), ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))
                     .Value("/elo tiers", "Tier by players", "players=tier list, e.g. 0=any,10=midhigh,20=high (any, low, mid, midhigh, high).", admin: true, current: TierTable())
+                    .Picker("/reserve", "Reserve a spot on", "Queue for a spot on another team; you are moved at your next respawn once the head counts and the Elo balance allow it.", admin: false, arg: "team")
+                    .Action("/reserve off", "Drop reservation", "Leave the reserve list.")
+                    .Action("/elo balance", "Team balance status", "Mean player Elo per team, the allowed head-count difference and whether Elo placement is active right now.")
                     .Picker("/elo seat", "Pin commander", "Pick the faction next to the player: that player commands it at the next round start, ahead of the Elo pick (one round).", admin: true, arg: "team,player");
                 if (_pins.Count > 0)
                     x.Picker("/elo unseat", "Drop one pin", "Drop a single pinned seat.", admin: true, arg: "choice",
@@ -196,6 +199,7 @@ namespace Si_EloMatchmaking
                 x.OnOff("/elo matchmaking", "Matchmaking", "ON: commanders are picked by rating at round start. OFF: the normal commander lottery; ratings are still tracked.", admin: true, on: Cfg.Enabled)
                  .OnOff("/elo swap", "Sol-Centauri swap", "May a Sol applicant be seated as Centauri commander and vice versa?", admin: true, on: Cfg.AllowHumanFactionSwap)
                  .OnOff("/elo volunteers", "Flex volunteers", "May !flex volunteers fill a seat nobody applied for?", admin: true, on: Cfg.AllowVolunteers)
+                 .OnOff("/elo balance", "Team balance", "Elo-aware placement of fresh joiners at round start, the volunteer ask and !reserve. OFF hands the joins back to the game.", admin: true, on: Cfg.BalanceEnabled)
                  .Value("/elo spread", "Spread weight", "Cost per Elo point of rating gap between the seated commanders (1.0 = even matchups first).", admin: true, current: Cfg.SpreadWeight)
                  .Value("/elo level", "Level weight", "Weight of the mean rating: 0.3 = mild preference for strong commanders, 1.0 = level first.", admin: true, current: Cfg.LevelWeight)
                  .Picker("/elo set", "Set rating", "Pick the player, then type the new rating.", admin: true, arg: "player,text")

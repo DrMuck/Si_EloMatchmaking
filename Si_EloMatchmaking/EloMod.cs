@@ -18,6 +18,10 @@
    aside when a peer applies. Seats are always filled when anyone applied.
  - Leaver rule: a commander who drops out in the last 10 minutes of a lost round still takes
    the loss.
+ - Team balance (TeamBalance.cs): takes over the join-team handling from Si_BasicTeamBalance (same
+   head-count rule, its preference values), places fresh joiners Elo-aware during the countdown
+   and the first minute, never moves anyone mid-round, asks for volunteers, and !reserve queues a
+   player for a spot on another team (moved at the next respawn).
 
  How it hooks the game (0.9.47 and 1.0.2, Mono server)
  - Postfix on MP_Strategy.OnMissionStateChanged(STARTED) with Priority.High: runs before
@@ -45,7 +49,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.5.2";
+        public const string Version = "0.6.0";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();
@@ -99,6 +103,7 @@ namespace Si_EloMatchmaking
         public override void OnLateInitializeMelon()
         {
             RegisterCommands();
+            InitBalance();
         }
 
         public override void OnApplicationQuit()
@@ -112,6 +117,7 @@ namespace Si_EloMatchmaking
             {
                 TickPreRound();
                 TickRound();
+                TickBalance();
             }
             catch (Exception ex)
             {
@@ -155,6 +161,7 @@ namespace Si_EloMatchmaking
         static void OnRoundStarted(MP_Strategy strat)
         {
             _preRoundActive = false;
+            ClearReserve();
             if (Cfg.Enabled || HasPins) RunMatchmaking(strat);   // admin pins run the pick for this one round even while OFF
             StartTracker(strat);
             if (Cfg.PlayerBalanceReport) ReportPlayerBalance(strat);
@@ -490,6 +497,7 @@ namespace Si_EloMatchmaking
         static void OnRoundEnded(Team? winner)
         {
             _prevRoundPlayers = ConnectedCount();   // tier table reference for the next pick (Tiers.cs)
+            ClearReserve();
             var r = _round;
             _round = null;
             if (r == null) return;

@@ -81,6 +81,27 @@ namespace Si_EloMatchmaking
         public int TierVoteMinVotes = 3;
         public double TierVoteMinShare = 0.34;
 
+        // ---- team balance (TeamBalance.cs) -------------------------------------
+        /// <summary>Elo-aware team placement, the volunteer ask and !reserve.</summary>
+        public bool BalanceEnabled = true;
+        /// <summary>Handle REQUEST_JOIN_TEAM here and remove Si_BasicTeamBalance's prefix on MP_Strategy.ProcessNetRPC at start-up (the two cannot share the packet). false = Si_BasicTeamBalance keeps the joins; only !reserve and the ask remain.</summary>
+        public bool BalanceTakeOverJoinHandling = true;
+        /// <summary>Head-count rule, Si_BasicTeamBalance's formula: allowed difference = ceil(players / divisor + addend). Its MelonPreferences values are used when present; these are the fallback.</summary>
+        public double BalanceTwoTeamDivisor = 8;
+        public double BalanceTwoTeamAddend = 1;
+        public double BalanceThreeTeamDivisor = 10;
+        public double BalanceThreeTeamAddend = 0;
+        /// <summary>A fresh joiner whose pick would push the gap in mean player Elo above this is placed on the team that closes it (counts permitting).</summary>
+        public double BalanceEloGapMax = 60;
+        /// <summary>Elo placement only when every team already has this many players (small samples are noise).</summary>
+        public int BalanceEloMinPlayersPerTeam = 4;
+        /// <summary>Elo placement is active during the countdown and this many seconds after round start; afterwards only the head-count rule.</summary>
+        public int BalanceEloWindowSeconds = 60;
+        /// <summary>During a round, ask for volunteers this often when a team is short by two or weaker than the Elo gap (0 = never).</summary>
+        public int BalanceAskIntervalSeconds = 180;
+        /// <summary>!reserve moves happen only while the player has no unit (dead / spawn screen).</summary>
+        public bool BalanceReserveAtRespawnOnly = true;
+
         // ---- countdown behaviour --------------------------------------------
         /// <summary>When a seat has no applicant but a !flex volunteer could fill it, extend the countdown once by this many seconds and ask. 0 = never.</summary>
         public int AskExtendSeconds = 15;
