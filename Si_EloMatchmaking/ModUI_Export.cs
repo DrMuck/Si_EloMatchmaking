@@ -95,6 +95,10 @@ namespace ModUI
             => Switch(text, label, description, admin, on ? "on" : "off", ("on", "ON"), ("off", "OFF"));
         public ModUIExport OnOffAuto(string text, string label, string description, bool admin, bool? setting)
             => Switch(text, label, description, admin, setting == null ? "auto" : setting.Value ? "on" : "off", ("on", "ON"), ("off", "OFF"), ("auto", "AUTO"));
+        // ---- multi-select row: one button per choice, every value listed in `current` (comma separated) highlighted;
+        //      a click sends `text + " " + value` and the mod adds or removes that value (the next frame shows the real set) ----
+        public ModUIExport Multi(string text, string label, string description, bool admin, string current, params (string value, string label)[] choices)
+            => Add(text, label, description, admin, null, current ?? "", Choices(choices), multi: true);
 
         // ---- value row: label with the current value, a text field and SET; SET sends `text + " " + field` ----
         public ModUIExport Value(string text, string label, string description, bool admin, string current)
@@ -148,11 +152,12 @@ namespace ModUI
             return root.Count == 0 ? null : JsonConvert.SerializeObject(root, Formatting.None);
         }
 
-        private ModUIExport Add(string text, string label, string description, bool admin, string arg, string value, JArray choices)
+        private ModUIExport Add(string text, string label, string description, bool admin, string arg, string value, JArray choices, bool multi = false)
         {
             var o = new JObject { ["t"] = text, ["l"] = label ?? text, ["d"] = description ?? "", ["a"] = admin };
             if (!string.IsNullOrEmpty(arg)) o["arg"] = arg;
             if (value != null) o["v"] = value;
+            if (multi) o["m"] = true;
             if (choices != null && choices.Count > 0) o["ch"] = choices;
             commands.Add(o);
             return this;

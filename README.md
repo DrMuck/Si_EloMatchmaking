@@ -161,7 +161,7 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo top` | all | top 5 established commanders |
 | `!elo <name>` | all | look up a commander |
 | `!flex` / `!elo flex` | all | toggle "I take any commander seat, Alien included" (persisted per Steam ID in ratings.json) |
-| `!flex alien`, `!flex sol cent`, `!flex humans`, `!flex on|off` | all | the factions you accept a seat on besides your own; an explicit set also limits the Sol/Centauri swap for you |
+| `!flex alien` (toggle one), `!flex alien on|off`, `!flex sol cent` (set), `!flex humans`, `!flex on|off` | all | the factions you accept a seat on besides your own; an explicit set also limits the Sol/Centauri swap for you. In Si_ModUI: one button per faction |
 | `!elo pass` | all | toggle "seat someone else when a peer (within `PassGap` 150) would take my seat" (persisted) |
 | `!elo vote <any|low|mid|midhigh|high>` | all | vote the tier of the next commander matchup (needs a quorum, one round) |
 | `!elo status` | all | switches, next tier, applicant pool and projected matchup during the countdown |
