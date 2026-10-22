@@ -45,7 +45,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.5.0";
+        public const string Version = "0.5.1";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();
@@ -203,6 +203,7 @@ namespace Si_EloMatchmaking
                     Sigma = Db.Sigma(Db.CommanderGames(steam)),
                     WaitBonus = Db.WaitBonus(steam),
                     Flex = Db.IsFlex(steam),
+                    FlexFactions = Db.FlexFactions(steam),
                     Pass = Db.IsPass(steam),
                     Streak = Db.Streak(steam),
                     Recent = Db.Streak(steam) > 0,
@@ -227,7 +228,7 @@ namespace Si_EloMatchmaking
         {
             var seats = BuildSeats(strat);
             var cands = CollectPool(strat, seats, consume: true);
-            int players = ConnectedCount();
+            int players = TierPlayerCount();
             string tierName = ResolveTier(players, out string tierReason);
             var tier = Window(tierName);
             ClearTierState();   // votes and the admin override are for this one pick
@@ -255,7 +256,7 @@ namespace Si_EloMatchmaking
                     if (fixedPicks[i] != null) GameApi.SayAll($"Admin pick: {GameApi.Colored(seats[i].Team, fixedPicks[i]!.Name)} commands {GameApi.Short(seats[i].Faction)}.");
             if (Cfg.Debug)
             {
-                MelonLogger.Msg($"[Elo] Pool: " + string.Join(", ", cands.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)}={c.Rating:0}~{c.Sigma:0}+{c.WaitBonus:0}/{c.Games}g{(c.Flex ? " flex" : "")}{(c.Streak > 0 ? $" streak{c.Streak}" : "")}[{c.Source}]"))
+                MelonLogger.Msg($"[Elo] Pool: " + string.Join(", ", cands.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)}={c.Rating:0}~{c.Sigma:0}+{c.WaitBonus:0}/{c.Games}g{(c.Flex ? " flex" : c.FlexFactions != null ? " flex:" + string.Join("+", c.FlexFactions) : "")}{(c.Pass ? " pass" : "")}{(c.Streak > 0 ? $" streak{c.Streak}" : "")}[{c.Source}]"))
                                 + $"; tier {tierName} ({tierReason}) window {tier.Low:0}..{tier.High:0}");
                 MelonLogger.Msg($"[Elo] Best: score={best.Score:0.0} mean={best.Mean:0} spread={best.Spread:0} tierCost={best.TierCost:0} swaps={best.Swaps} vols={best.Volunteers} unfilled={best.Unfilled}");
             }
@@ -376,7 +377,7 @@ namespace Si_EloMatchmaking
 
             var seats = BuildSeats(strat);
             var cands = CollectPool(strat, seats, consume: false);
-            AnnounceTier(ConnectedCount());
+            AnnounceTier(TierPlayerCount());
 
             if (Cfg.AnnounceApplicants)
             {
@@ -384,13 +385,13 @@ namespace Si_EloMatchmaking
                 {
                     string key = c.Steam + "|" + c.AppliedFaction;
                     if (!_announcedApplicants.Add(key)) continue;
-                    GameApi.SayAll($"{GameApi.Colored(c.AppliedTeam, c.Name)} applied for {GameApi.Short(c.AppliedFaction)} commander, Elo {Db.Format(c.Steam)}" + (c.Flex ? " [flex]" : "") + (c.WaitBonus > 0 ? $" [waited {Db.WaitingRounds(c.Steam)}, +{c.WaitBonus:0}]" : ""));
+                    GameApi.SayAll($"{GameApi.Colored(c.AppliedTeam, c.Name)} applied for {GameApi.Short(c.AppliedFaction)} commander, Elo {Db.Format(c.Steam)}" + (c.Flex ? " [flex]" : c.FlexFactions != null ? $" [flex {Db.FlexLabel(c.Steam)}]" : "") + (c.Pass ? " [pass]" : "") + (c.WaitBonus > 0 ? $" [waited {Db.WaitingRounds(c.Steam)}, +{c.WaitBonus:0}]" : ""));
                 }
             }
 
             if (Cfg.AskExtendSeconds > 0 && !_askedThisRound && strat.Timer <= 6f && strat.Timer > 1.5f && seats.Count >= 2 && cands.Count > 0)
             {
-                var best = Matchmaker.Solve(seats, cands, Cfg, Rng, null, Window(ResolveTier(ConnectedCount(), out _)));
+                var best = Matchmaker.Solve(seats, cands, Cfg, Rng, null, Window(ResolveTier(TierPlayerCount(), out _)));
                 int filled = seats.Count - best.Unfilled;
                 if (best.Unfilled > 0 && cands.Count > filled)
                 {
@@ -488,6 +489,7 @@ namespace Si_EloMatchmaking
         // =====================================================================
         static void OnRoundEnded(Team? winner)
         {
+            _prevRoundPlayers = ConnectedCount();   // tier table reference for the next pick (Tiers.cs)
             var r = _round;
             _round = null;
             if (r == null) return;

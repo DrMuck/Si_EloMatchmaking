@@ -59,8 +59,11 @@ quantiles of the established commander population (>= 5 games), or `TierMidRatin
 `TierHighRating` when set. After a season reset everyone sits at 1500, so the tiers are inert until
 the ratings spread. The tier for a pick comes from, in this order: an admin `!elo tier` override
 (one round), a `!elo vote` with quorum (at least 3 ballots and a third of the players, plurality,
-one round), the `TierByPlayers` table by connected players (default `0=any,10=midhigh,20=high`).
-The countdown announces the tier when it is not `any`.
+one round), the `TierByPlayers` table by player count (default `0=any,10=midhigh,20=high`). The
+count is the larger of the players connected now and at the end of the previous round
+(`TierPlayersUsePreviousRound`), because the countdown runs right after the map change while
+players are still loading; when the server empties the tier follows one round later. The countdown
+announces the tier when it is not `any`.
 
 **Newcomers and rotation.** A rating is uncertain until it has games behind it, so a gap is only
 penalised beyond what the two uncertainties can explain: a 1500? newcomer against an established
@@ -157,7 +160,8 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo` | all | own commander and player rating |
 | `!elo top` | all | top 5 established commanders |
 | `!elo <name>` | all | look up a commander |
-| `!flex` / `!elo flex` | all | toggle "I take any commander seat, Alien included" (persisted) |
+| `!flex` / `!elo flex` | all | toggle "I take any commander seat, Alien included" (persisted per Steam ID in ratings.json) |
+| `!flex alien`, `!flex sol cent`, `!flex humans`, `!flex on|off` | all | the factions you accept a seat on besides your own; an explicit set also limits the Sol/Centauri swap for you |
 | `!elo pass` | all | toggle "seat someone else when a peer (within `PassGap` 150) would take my seat" (persisted) |
 | `!elo vote <any|low|mid|midhigh|high>` | all | vote the tier of the next commander matchup (needs a quorum, one round) |
 | `!elo status` | all | switches, next tier, applicant pool and projected matchup during the countdown |

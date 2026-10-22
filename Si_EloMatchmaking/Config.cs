@@ -64,6 +64,8 @@ namespace Si_EloMatchmaking
         /// Tiers: any, low, mid, midhigh, high. The tier is a cost, not a filter: a seat is never left to the AI because of it, and
         /// when too few commanders of the tier apply the best available fill in (a mid vs high pair is fine).</summary>
         public List<TierStep> TierByPlayers = new List<TierStep> { new TierStep(0, "any"), new TierStep(10, "midhigh"), new TierStep(20, "high") };
+        /// <summary>Use the larger of the players connected now and at the end of the previous round for the table (the countdown runs right after the map change, when players are still loading).</summary>
+        public bool TierPlayersUsePreviousRound = true;
         /// <summary>Cost per Elo point a seated commander's rating sits outside the tier window (after the sigma discount).</summary>
         public double TierWeight = 1.0;
         /// <summary>Tier bounds as quantiles of the established commander population (games &gt;= TierMinGames): "mid" starts at TierMidQuantile, "high" at TierHighQuantile.</summary>
