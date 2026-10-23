@@ -63,6 +63,7 @@ namespace Si_EloMatchmaking
         /// <summary>Which rating tier the pick aims for, by connected players: the row with the largest Players &lt;= count applies.
         /// Tiers: any, low, mid, midhigh, high. The tier is a cost, not a filter: a seat is never left to the AI because of it, and
         /// when too few commanders of the tier apply the best available fill in (a mid vs high pair is fine).</summary>
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]   // else Newtonsoft APPENDS the file's rows to these defaults on every load
         public List<TierStep> TierByPlayers = new List<TierStep> { new TierStep(0, "any"), new TierStep(10, "midhigh"), new TierStep(20, "high") };
         /// <summary>Use the larger of the players connected now and at the end of the previous round for the table (the countdown runs right after the map change, when players are still loading).</summary>
         public bool TierPlayersUsePreviousRound = true;
@@ -164,6 +165,11 @@ namespace Si_EloMatchmaking
                 {
                     var cfg = JsonConvert.DeserializeObject<EloConfig>(File.ReadAllText(ConfigPath)) ?? new EloConfig();
                     if (cfg.TierByPlayers == null || cfg.TierByPlayers.Count == 0) cfg.TierByPlayers = new EloConfig().TierByPlayers;
+                    // one row per player count (0.6.0 configs grew duplicate rows on every load), last one wins, sorted
+                    var byCount = new Dictionary<int, TierStep>();
+                    foreach (var s in cfg.TierByPlayers) if (s != null) byCount[s.Players] = s;
+                    cfg.TierByPlayers = new List<TierStep>(byCount.Values);
+                    cfg.TierByPlayers.Sort((a, b) => a.Players.CompareTo(b.Players));
                     if (cfg.NoCommanderPenalty < 1000)   // pre-0.5 default 400 could leave a seat to the AI next to a lopsided pair
                     {
                         MelonLogger.Msg($"[Elo] NoCommanderPenalty {cfg.NoCommanderPenalty} raised to 1500 (0.5.0: seats are always filled when anyone applied).");
