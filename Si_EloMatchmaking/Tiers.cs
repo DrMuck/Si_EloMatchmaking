@@ -210,6 +210,48 @@ namespace Si_EloMatchmaking
             GameApi.SayAll($"Admin set the next commander matchup to the {TierLabel(tier)} tier.");
         }
 
+        /// <summary>The tier table as exactly three sorted rows for the UI (small / medium / full server); pads with the defaults.</summary>
+        public static List<TierStep> TierRows()
+        {
+            var rows = (Cfg.TierByPlayers ?? new List<TierStep>()).Where(s => s != null).OrderBy(s => s.Players).ToList();
+            var def = new EloConfig().TierByPlayers;
+            while (rows.Count < 3) rows.Add(new TierStep(rows.Count == 0 ? 0 : rows[rows.Count - 1].Players + 10, def[Math.Min(rows.Count, def.Count - 1)].Tier));
+            if (rows[0].Players != 0) rows[0].Players = 0;
+            return rows;
+        }
+
+        // !elo tierat <row> <tier>      tier of table row 1..3 (the ModUI switch rows)
+        // !elo tierfrom <row> <players> player threshold of row 2..3 (row 1 always starts at 0)
+        static void HandleTierRow(Player? caller, string rest, bool threshold)
+        {
+            var sp = (rest ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            var rows = TierRows();
+            if (sp.Length < 2 || !int.TryParse(sp[0], out int row) || row < 1 || row > rows.Count)
+            {
+                GameApi.Say(caller, threshold ? "Usage: !elo tierfrom <2|3> <players>" : "Usage: !elo tierat <1|2|3> <any|low|mid|midhigh|high>");
+                return;
+            }
+            var r = rows[row - 1];
+            if (threshold)
+            {
+                if (row == 1) { GameApi.Say(caller, "Row 1 always starts at 0 players."); return; }
+                if (!int.TryParse(sp[1], out int n) || n < 1) { GameApi.Say(caller, "Usage: !elo tierfrom <2|3> <players>"); return; }
+                int lo = rows[row - 2].Players + 1, hi = row < rows.Count ? rows[row].Players - 1 : int.MaxValue;
+                if (n < lo || n > hi) { GameApi.Say(caller, $"Row {row} must start between {lo} and {(hi == int.MaxValue ? "any" : hi.ToString())} players (rows stay in order)."); return; }
+                r.Players = n;
+            }
+            else
+            {
+                string? t = ParseTier(sp[1]);
+                if (t == null) { GameApi.Say(caller, "Usage: !elo tierat <1|2|3> <any|low|mid|midhigh|high>"); return; }
+                r.Tier = t;
+            }
+            Cfg.TierByPlayers = rows;
+            ConfigStore.Save(Cfg);
+            _announcedTier = "";
+            GameApi.SayAll($"Commander tier by player count is now {TierTable()}.");
+        }
+
         static void HandleTiers(Player? caller, string rest)
         {
             string arg = (rest ?? "").Trim();

@@ -185,8 +185,16 @@ namespace Si_EloMatchmaking
                     .Multi("/flex", "Flex", "The factions whose commander seat you accept besides your own when that gives the best matchup; click a faction to add or remove it. Your own setting, remembered across sessions.", admin: false, current: "", ("sol", "Sol"), ("cent", "Centauri"), ("alien", "Alien"))
                     .Switch("/elo pass", "Pass", "Still apply, but step aside when another applicant of similar rating applies for your seat. Your own setting, remembered across sessions.", admin: false, current: "", ("on", "ON"), ("off", "OFF"))
                     .Switch("/elo vote", "Vote next tier", "Vote which Elo tier the next commander matchup aims for (needs a quorum; an admin setting wins).", admin: false, current: "", ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))
-                    .Switch("/elo tier", "Next tier", "Force the tier of the next commander pick; AUTO = by vote, else by player count.", admin: true, current: _tierOverride ?? "auto", ("auto", "AUTO"), ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"))
-                    .Value("/elo tiers", "Tier by players", "players=tier list, e.g. 0=any,10=midhigh,20=high (any, low, mid, midhigh, high).", admin: true, current: TierTable())
+                    .Switch("/elo tier", "Next tier", "Force the tier of the next commander pick; AUTO = by vote, else by player count.", admin: true, current: _tierOverride ?? "auto", ("auto", "AUTO"), ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High"));
+                // Tier by player count: one switch row per table row (small / medium / full server) plus the two thresholds.
+                var rows = TierRows();
+                var tierChoices = new[] { ("any", "Any"), ("low", "Low"), ("mid", "Mid"), ("midhigh", "Mid/High"), ("high", "High") };
+                x.Switch("/elo tierat 1", $"Tier, small server (0-{rows[1].Players - 1} players)", "Tier the pick aims for while fewer players are on than the medium threshold.", admin: true, current: rows[0].Tier, tierChoices)
+                 .Switch("/elo tierat 2", $"Tier, medium server ({rows[1].Players}-{rows[2].Players - 1} players)", "Tier from the medium threshold up to the full-server threshold.", admin: true, current: rows[1].Tier, tierChoices)
+                 .Switch("/elo tierat 3", $"Tier, full server ({rows[2].Players}+ players)", "Tier from the full-server threshold on. The tier is a cost, never a filter: seats are always filled when anyone applied.", admin: true, current: rows[2].Tier, tierChoices)
+                 .Value("/elo tierfrom 2", "Medium server from (players)", "Player count at which the medium-server tier starts.", admin: true, current: rows[1].Players.ToString())
+                 .Value("/elo tierfrom 3", "Full server from (players)", "Player count at which the full-server tier starts (counted as the larger of now and the end of the previous round).", admin: true, current: rows[2].Players.ToString());
+                x.Action("/elo tiers", "Tier table (text)", "Shows the table as players=tier; the chat form !elo tiers 0=any,10=midhigh,20=high sets it in one go.", admin: true)
                     .Picker("/reserve", "Reserve a spot on", "Queue for a spot on another team; you are moved at your next respawn once the head counts and the Elo balance allow it.", admin: false, arg: "team")
                     .Action("/reserve off", "Drop reservation", "Leave the reserve list.")
                     .Action("/elo balance", "Team balance status", "Mean player Elo per team, the allowed head-count difference and whether Elo placement is active right now.")

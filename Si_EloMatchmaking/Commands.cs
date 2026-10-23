@@ -24,6 +24,7 @@
    !elo level <weight>       LevelWeight (0.3 = mild preference for strong commanders, 1.0 = level-first)
    !elo tier <tier>|auto     force the tier of the next pick / back to vote + player count (Tiers.cs)
    !elo tiers 0=any,10=midhigh,20=high   tier by player count (persisted)
+   !elo tierat <1|2|3> <tier>            tier of one table row (ModUI switch rows); !elo tierfrom <2|3> <players> its threshold
    !elo seat <faction> <player>   pin a commander for the next round (Pins.cs); !elo seat lists, !elo unseat drops
 */
 using MelonLoader;
@@ -161,11 +162,17 @@ namespace Si_EloMatchmaking
                 if (want != "on" && want != "off") { GameApi.Say(caller, $"Matchmaking is {(Cfg.Enabled ? "ON" : "OFF")}. Usage: !elo matchmaking on|off"); return; }
                 sub = want;
             }
-            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "level" || sub == "tier" || sub == "tiers" || sub == "reset" || sub == "seat" || sub == "unseat" || sub == "force")
+            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "level" || sub == "tier" || sub == "tiers" || sub == "tierat" || sub == "tierfrom" || sub == "reset" || sub == "seat" || sub == "unseat" || sub == "force")
             {
                 if (!IsAdmin(caller)) { GameApi.Say(caller, "Admin only."); return; }
                 switch (sub)
                 {
+                    case "tierat":
+                        HandleTierRow(caller, rest, threshold: false);
+                        return;
+                    case "tierfrom":
+                        HandleTierRow(caller, rest, threshold: true);
+                        return;
                     case "tier":
                         HandleTier(caller, rest);
                         return;
