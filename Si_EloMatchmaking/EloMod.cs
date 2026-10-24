@@ -21,7 +21,7 @@
  - Team balance (TeamBalance.cs): takes over the join-team handling from Si_BasicTeamBalance (same
    head-count rule, its preference values), places fresh joiners Elo-aware during the countdown
    and the first minute, never moves anyone mid-round, asks for volunteers, and !reserve queues a
-   player for a spot on another team (moved at the next respawn).
+   player for a spot on another team (moved at once when counts and Elo allow it, else when a spot opens).
 
  How it hooks the game (0.9.47 and 1.0.2, Mono server)
  - Postfix on MP_Strategy.OnMissionStateChanged(STARTED) with Priority.High: runs before
@@ -49,7 +49,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.6.2";
+        public const string Version = "0.6.3";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();

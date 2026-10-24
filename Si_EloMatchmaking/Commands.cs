@@ -10,7 +10,7 @@
    !elo vote <tier>          vote the Elo tier of the next commander matchup (any|low|mid|midhigh|high; Tiers.cs)
    !elo status               current applicant pool, next tier and the matchup it would produce
    !elo balance [on|off]     team balance status (TeamBalance.cs); on/off is admin
-   !reserve <team> | off     queue for a spot on another team, moved at the next respawn (TeamBalance.cs)
+   !reserve <team> | off     switch team at once when counts + Elo allow it, else queued until a spot opens (TeamBalance.cs)
    !elo help
 
    admin (Power.Commander):
