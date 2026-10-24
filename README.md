@@ -107,14 +107,14 @@ Si_BasicTeamBalance's own MelonPreferences values (one config for the counts), a
   Si_BasicTeamBalance, which checks before). Allowed difference = `ceil(players / divisor + addend)`.
 - **Volunteer ask.** Every `BalanceAskIntervalSeconds` (180) during a round, when a team is short by
   two or more or weaker by more than the Elo gap, chat asks for volunteers.
-- **`!reserve <team>`.** Queue for a spot on another team; `!reserve off` leaves, `!reserve` shows
-  the queue. Every 2 s the first in line whose move keeps the counts legal and does not widen the
-  Elo gap past the limit is moved, at their next respawn (`BalanceReserveAtRespawnOnly`), so no unit
-  is destroyed under them. Two mirrored reservations (a Sol player wants Centauri, a Centauri player
-  wants Sol) are approved as a **swap**: counts cannot free a spot for either alone, so both are
-  cleared together (Elo check on the combined result) and each moves at their own next respawn; if
-  one of them leaves before moving, the other falls back to the normal queue. The list is cleared at
-  round start and end.
+- **`!reserve <team>`.** Switch team, or queue for a spot: `!reserve off` leaves, `!reserve` shows
+  the queue. When the move keeps the counts legal and does not widen the Elo gap past the limit, the
+  player is moved at once (unit destroyed, respawn on the new team, exactly what the game's own team
+  menu does); otherwise they wait and every 2 s the first in line whose move has become legal is
+  moved. Two mirrored reservations (a Sol player wants Centauri, a Centauri player wants Sol) are
+  approved as a **swap**: counts cannot free a spot for either alone, so both are cleared together
+  (Elo check on the combined result) and moved; if one of them leaves before moving, the other falls
+  back to the normal queue. The list is cleared at round start and end.
 
 `!elo balance` shows the state (mean player Elo per team, allowed difference, whether Elo placement
 is active); `!elo balance on|off` (admin) is the master switch. `BalanceTakeOverJoinHandling=false`
@@ -206,7 +206,7 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo vote <any|low|mid|midhigh|high>` | all | vote the tier of the next commander matchup (needs a quorum, one round) |
 | `!elo status` | all | switches, next tier, applicant pool and projected matchup during the countdown |
 | `!elo balance` | all | team balance state: mean player Elo per team, allowed head-count difference, Elo placement active? |
-| `!reserve <sol|cent|alien>` / `!reserve off` / `!reserve` | all | queue for a spot on another team, moved at the next respawn once counts and Elo allow it |
+| `!reserve <sol|cent|alien>` / `!reserve off` / `!reserve` | all | switch team at once when counts and Elo allow it, else queued and moved the moment a spot opens |
 | `!elo on` / `off` (also `!elo matchmaking on\|off`) | admin (Commander power) | master switch; off = vanilla lottery, ratings still tracked |
 | `!elo reload` | admin | reload ratings.json |
 | `!elo reset confirm` | admin | new season: back up and wipe all ratings (for the 1.0 launch) |

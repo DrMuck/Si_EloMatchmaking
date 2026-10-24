@@ -24,7 +24,8 @@
            weaker by more than the Elo gap, chat asks for volunteers (team menu or !reserve).
    reserve !reserve <team> queues for a spot on that team; !reserve off leaves, !reserve shows the
            queue. Every 2 s the first in line whose move keeps the counts legal and does not widen the
-           Elo gap past the limit is moved, at their next respawn (BalanceReserveAtRespawnOnly) so no
+           Elo gap past the limit is moved right away (the game's own team menu does the same; a dead unit
+           still counts as the player's ControlledUnit, so "wait for the respawn" never fired - 0.6.3), so no
            unit is destroyed under them. The list is cleared at round start and end.
 */
 using HarmonyLib;
@@ -436,17 +437,22 @@ namespace Si_EloMatchmaking
                 for (int i = 0; i < teams.Count; i++) if (GameApi.Faction(teams[i]) == r.Faction) target = i;
                 if (target < 0) { GameApi.Say(player, $"{r.Faction} is not in this match any more; reservation dropped."); Drop(r, moved: false); continue; }
                 if (ReferenceEquals(player.Team, teams[target])) { Drop(r, moved: true); continue; }
-                if (Cfg.BalanceReserveAtRespawnOnly) { try { if (player.ControlledUnit != null) continue; } catch { } }
                 // an approved swap partner moves regardless of the counts: the other half restores them
                 if (r.Partner == null && !BalanceRule.CanMove(states, target, Db.PlayerRating(r.Steam), MaxDiffNow(states.Count), Cfg.BalanceEloGapMax, out _)) continue;
-                if (!GameApi.MovePlayer(player, teams[target])) { Drop(r, moved: false); continue; }
-                GameApi.RespawnIfUnitless(player);
-                string partner = r.Partner != null ? _reserve.FirstOrDefault(x => x.Steam == r.Partner)?.Name ?? "" : "";
-                Drop(r, moved: true);
-                MelonLogger.Msg($"[Elo] Reserve: {player.PlayerName} moved to {r.Faction} after {Time.time - r.Since:0}s" + (partner.Length > 0 ? $" (swap with {partner})" : "") + ".");
-                GameApi.SayAll($"{GameApi.Colored(teams[target], player.PlayerName)} moves to {GameApi.Short(r.Faction)} (" + (partner.Length > 0 ? $"swap with {partner}" : "reserved spot") + ").");
-                break;   // one move per tick, counts changed
+                if (MoveReserved(r, player, teams[target])) break;   // one move per tick, counts changed
             }
+        }
+
+        /// <summary>Move a queued player now: unit destroyed, team set, respawned on the new team (what the game's team menu does). Removes the reservation either way.</summary>
+        static bool MoveReserved(Reservation r, Player player, Team team)
+        {
+            if (!GameApi.MovePlayer(player, team)) { Drop(r, moved: false); GameApi.Say(player, $"Could not move you to {GameApi.Short(r.Faction)}; reservation dropped."); return false; }
+            GameApi.RespawnIfUnitless(player);
+            string partner = r.Partner != null ? _reserve.FirstOrDefault(x => x.Steam == r.Partner)?.Name ?? "" : "";
+            Drop(r, moved: true);
+            MelonLogger.Msg($"[Elo] Reserve: {player.PlayerName} moved to {r.Faction} after {Time.time - r.Since:0}s" + (partner.Length > 0 ? $" (swap with {partner})" : "") + ".");
+            GameApi.SayAll($"{GameApi.Colored(team, player.PlayerName)} moves to {GameApi.Short(r.Faction)} (" + (partner.Length > 0 ? $"swap with {partner}" : "reserved spot") + ").");
+            return true;
         }
 
         /// <summary>Remove a reservation. A partner still waiting keeps its approval when this one moved (it owes the counts a move) and loses it otherwise.</summary>
@@ -479,8 +485,8 @@ namespace Si_EloMatchmaking
                     }
                     a.Partner = b.Steam; b.Partner = a.Steam;
                     MelonLogger.Msg($"[Elo] Reserve: swap approved {a.Name} -> {a.Faction} / {b.Name} -> {b.Faction}.");
-                    GameApi.Say(pa, $"Swap arranged with {b.Name}: you move to {GameApi.Short(a.Faction)} at your next respawn, they move to {GameApi.Short(b.Faction)} at theirs.");
-                    GameApi.Say(pb, $"Swap arranged with {a.Name}: you move to {GameApi.Short(b.Faction)} at your next respawn, they move to {GameApi.Short(a.Faction)} at theirs.");
+                    GameApi.Say(pa, $"Swap arranged with {b.Name}: you move to {GameApi.Short(a.Faction)}, they move to {GameApi.Short(b.Faction)}.");
+                    GameApi.Say(pb, $"Swap arranged with {a.Name}: you move to {GameApi.Short(b.Faction)}, they move to {GameApi.Short(a.Faction)}.");
                     break;
                 }
             }
@@ -495,11 +501,12 @@ namespace Si_EloMatchmaking
             var states = TeamStates(strat, null, out var teams);
             if (states.Count < 2) return;
             int maxCount = states.Max(t => t.Count), minCount = states.Min(t => t.Count);
+            if (maxCount == 0) return;   // nobody on a team (0.6.2 threw here on an empty server)
             var shortTeam = states.First(t => t.Count == minCount);
             double gap = BalanceRule.Gap(states);
             var weak = states.Where(t => t.Count > 0).OrderBy(t => t.MeanElo).First();
             if (maxCount - minCount >= 2)
-                GameApi.SayAll($"{GameApi.Short(shortTeam.Name)} is short on players ({minCount} vs {maxCount}). Switch via the team menu or type !reserve {GameApi.Short(shortTeam.Name).ToLowerInvariant()} to move at your next respawn.");
+                GameApi.SayAll($"{GameApi.Short(shortTeam.Name)} is short on players ({minCount} vs {maxCount}). Switch via the team menu or type !reserve {GameApi.Short(shortTeam.Name).ToLowerInvariant()}.");
             else if (gap > Cfg.BalanceEloGapMax && states.All(t => t.Count >= Cfg.BalanceEloMinPlayersPerTeam))
                 GameApi.SayAll($"{GameApi.Short(weak.Name)} is the weaker team by player Elo ({Means(states)}). Volunteers: !reserve {GameApi.Short(weak.Name).ToLowerInvariant()}.");
         }
@@ -522,7 +529,7 @@ namespace Si_EloMatchmaking
             if (arg.Length == 0)
             {
                 string list = _reserve.Count == 0 ? "nobody is waiting" : string.Join(", ", _reserve.Select((r, i) => $"{i + 1}. {r.Name} -> {GameApi.Short(r.Faction)}"));
-                GameApi.Say(caller, (mine == null ? "No reservation. " : $"You wait for {GameApi.Short(mine.Faction)}. ") + $"Queue: {list}. Usage: !reserve sol|cent|alien, !reserve off. You are moved at your next respawn once a spot is free and the Elo balance allows it.");
+                GameApi.Say(caller, (mine == null ? "No reservation. " : $"You wait for {GameApi.Short(mine.Faction)}. ") + $"Queue: {list}. Usage: !reserve sol|cent|alien, !reserve off. You are moved as soon as a spot is free and the Elo balance allows it.");
                 return;
             }
             if (!Cfg.BalanceEnabled) { GameApi.Say(caller, "Team balance is off on this server."); return; }
@@ -533,14 +540,25 @@ namespace Si_EloMatchmaking
             if (team == null) { GameApi.Say(caller, $"{faction} is not in this match."); return; }
             if (ReferenceEquals(caller.Team, team)) { GameApi.Say(caller, $"You are already on {GameApi.Short(faction)}."); return; }
             if (_round == null) { GameApi.Say(caller, "No round running; pick the team in the team menu."); return; }
-            if (mine != null) { mine.Faction = faction; mine.Since = Time.time; }
-            else _reserve.Add(new Reservation { Steam = steam, Name = caller.PlayerName ?? steam, Faction = faction, Since = Time.time });
-            int pos = _reserve.FindIndex(r => r.Steam == steam) + 1;
+            if (mine != null)
+            {
+                // a changed wish drops a swap approval on both sides (Drop clears the partner's); the reservation itself stays
+                if (mine.Faction != faction && mine.Partner != null) { Drop(mine, moved: false); mine.Partner = null; _reserve.Add(mine); }
+                mine.Faction = faction; mine.Since = Time.time;
+            }
+            else { mine = new Reservation { Steam = steam, Name = caller.PlayerName ?? steam, Faction = faction, Since = Time.time }; _reserve.Add(mine); }
             var states = TeamStates(strat, caller, out var teams);
             int target = IndexOfTeam(teams, team);
             string why = "team not in this match";
-            string now = target >= 0 && BalanceRule.CanMove(states, target, Db.PlayerRating(steam), MaxDiffNow(states.Count), Cfg.BalanceEloGapMax, out why) ? "a spot is free, you move at your next respawn" : $"waiting: {why}";
-            GameApi.Say(caller, $"Reserved a spot on {GameApi.Short(faction)} (position {pos}); {now}. !reserve off to cancel.");
+            if (target >= 0 && BalanceRule.CanMove(states, target, Db.PlayerRating(steam), MaxDiffNow(states.Count), Cfg.BalanceEloGapMax, out why))
+            {
+                // the spot is open: move right now, like the game's own team menu would
+                MoveReserved(mine, caller, teams[target]);
+                return;
+            }
+            int pos = _reserve.FindIndex(r => r.Steam == steam) + 1;
+            MelonLogger.Msg($"[Elo] Reserve: {caller.PlayerName} queued for {faction} (position {pos}): {why}.");
+            GameApi.Say(caller, $"Reserved a spot on {GameApi.Short(faction)} (position {pos}); waiting: {why}. You move the moment it is possible. !reserve off to cancel.");
         }
 
         static void HandleBalance(Player? caller, string rest)

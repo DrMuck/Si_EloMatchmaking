@@ -82,6 +82,10 @@ namespace ModUI
         // ---- plain button: sends `text` (plus the Arguments field, if the player typed one) ----
         public ModUIExport Action(string text, string label, string description, bool admin = false)
             => Add(text, label, description, admin, null, null, null);
+        // ---- read-only report (status, help, top list): an Action flagged "i", so the chat directory (/mods) and clients
+        //      list it under "info" instead of "do and adjust". Without the flag the server guesses from text and label. ----
+        public ModUIExport Report(string text, string label, string description, bool admin = false)
+            => Add(text, label, description, admin, null, null, null, info: true);
 
         // ---- button that opens pickers: arg = chain of stages "player", "team", "map", "ban", "choice" (comma separated);
         //      a "choice" stage takes its options from `choices`. The chosen tokens are appended to `text`. ----
@@ -106,7 +110,9 @@ namespace ModUI
         public ModUIExport Value(string text, string label, string description, bool admin, double current)
             => Value(text, label, description, admin, current.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
 
-        // ---- catalog (Si_Buy): a button grid per faction, a click sends `command + " " + name` ----
+        // ---- catalog (Si_Buy, Si_Spawn): a button grid per faction, a click sends `command + " " + name`. Extras the
+        //      client understands: "admin": true (shown on the admin tab instead of the player tab), "all": true (faction
+        //      tabs instead of the viewer's own faction), "credits": false (no credits line / status call), "offText". ----
         public CatalogBuilder Catalog(string command, bool enabled = true) => new CatalogBuilder(this, command, enabled);
         public sealed class CatalogBuilder
         {
@@ -116,7 +122,10 @@ namespace ModUI
             { this.owner = owner; doc = new JObject { ["cmd"] = command, ["enabled"] = enabled, ["catalog"] = factions }; }
             public CatalogBuilder Faction(string name) { faction = new JArray(); factions[name] = faction; category = null; return this; }
             public CatalogBuilder Category(string name) { category = new JArray(); faction.Add(new JObject { ["c"] = name, ["u"] = category }); return this; }
-            public CatalogBuilder Item(string name, int cost) { category.Add(new JArray(name, cost)); return this; }
+            // An item is [name, cost] or [name, cost, label]: the client shows `label` (or the name) and sends `command + " " + name`;
+            // a cost of 0 or less is not shown.
+            public CatalogBuilder Item(string name, int cost, string label = null)
+            { category.Add(label == null || label == name ? new JArray(name, cost) : new JArray(name, cost, label)); return this; }
             public CatalogBuilder Extra(string key, JToken value) { doc[key] = value; return this; }
             public ModUIExport Done() { foreach (var p in doc.Properties()) owner.root[p.Name] = p.Value; return owner; }
         }
@@ -152,12 +161,13 @@ namespace ModUI
             return root.Count == 0 ? null : JsonConvert.SerializeObject(root, Formatting.None);
         }
 
-        private ModUIExport Add(string text, string label, string description, bool admin, string arg, string value, JArray choices, bool multi = false)
+        private ModUIExport Add(string text, string label, string description, bool admin, string arg, string value, JArray choices, bool multi = false, bool info = false)
         {
             var o = new JObject { ["t"] = text, ["l"] = label ?? text, ["d"] = description ?? "", ["a"] = admin };
             if (!string.IsNullOrEmpty(arg)) o["arg"] = arg;
             if (value != null) o["v"] = value;
             if (multi) o["m"] = true;
+            if (info) o["i"] = true;
             if (choices != null && choices.Count > 0) o["ch"] = choices;
             commands.Add(o);
             return this;

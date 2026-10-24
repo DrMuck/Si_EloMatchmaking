@@ -195,9 +195,9 @@ namespace Si_EloMatchmaking
                  .Value("/elo tierfrom 2", "Medium server from (players)", "Player count at which the medium-server tier starts.", admin: true, current: rows[1].Players.ToString())
                  .Value("/elo tierfrom 3", "Full server from (players)", "Player count at which the full-server tier starts (counted as the larger of now and the end of the previous round).", admin: true, current: rows[2].Players.ToString());
                 x.Action("/elo tiers", "Tier table (text)", "Shows the table as players=tier; the chat form !elo tiers 0=any,10=midhigh,20=high sets it in one go.", admin: true)
-                    .Picker("/reserve", "Reserve a spot on", "Queue for a spot on another team; you are moved at your next respawn once the head counts and the Elo balance allow it.", admin: false, arg: "team")
+                    .Picker("/reserve", "Switch team", "Move to another team at once when the head counts and the Elo balance allow it; otherwise you are queued and moved the moment a spot opens.", admin: false, arg: "team")
                     .Action("/reserve off", "Drop reservation", "Leave the reserve list.")
-                    .Action("/elo balance", "Team balance status", "Mean player Elo per team, the allowed head-count difference and whether Elo placement is active right now.")
+                    .Action("/elo balance status", "Team balance status", "Mean player Elo per team, the allowed head-count difference and whether Elo placement is active right now.")
                     .Picker("/elo seat", "Pin commander", "Pick the faction next to the player: that player commands it at the next round start, ahead of the Elo pick (one round).", admin: true, arg: "team,player");
                 if (_pins.Count > 0)
                     x.Picker("/elo unseat", "Drop one pin", "Drop a single pinned seat.", admin: true, arg: "choice",

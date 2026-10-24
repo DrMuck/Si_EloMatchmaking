@@ -100,8 +100,7 @@ namespace Si_EloMatchmaking
         public int BalanceEloWindowSeconds = 60;
         /// <summary>During a round, ask for volunteers this often when a team is short by two or weaker than the Elo gap (0 = never).</summary>
         public int BalanceAskIntervalSeconds = 180;
-        /// <summary>!reserve moves happen only while the player has no unit (dead / spawn screen).</summary>
-        public bool BalanceReserveAtRespawnOnly = true;
+        // 0.6.3: BalanceReserveAtRespawnOnly removed; !reserve moves at once (a stale key in the JSON is ignored).
 
         // ---- countdown behaviour --------------------------------------------
         /// <summary>When a seat has no applicant but a !flex volunteer could fill it, extend the countdown once by this many seconds and ask. 0 = never.</summary>
