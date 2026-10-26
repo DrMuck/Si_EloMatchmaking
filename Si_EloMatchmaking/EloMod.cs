@@ -22,6 +22,7 @@
    head-count rule, its preference values), places fresh joiners Elo-aware during the countdown
    and the first minute, never moves anyone mid-round, asks for volunteers, and !reserve queues a
    player for a spot on another team (moved at once when counts and Elo allow it, else when a spot opens).
+   Since 0.7.0 allied teams (AllianceHook.GroupOf, set by Si_Alliance) are balanced as one bloc.
 
  How it hooks the game (0.9.47 and 1.0.2, Mono server)
  - Postfix on MP_Strategy.OnMissionStateChanged(STARTED) with Priority.High: runs before
@@ -49,7 +50,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.6.3";
+        public const string Version = "0.7.0";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();

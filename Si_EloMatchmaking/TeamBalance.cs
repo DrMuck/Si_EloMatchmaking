@@ -27,6 +27,11 @@
            Elo gap past the limit is moved right away (the game's own team menu does the same; a dead unit
            still counts as the player's ControlledUnit, so "wait for the respawn" never fired - 0.6.3), so no
            unit is destroyed under them. The list is cleared at round start and end.
+   blocs   (0.7.0, for Si_Alliance) AllianceHook.GroupOf maps each team to a group id; teams with the same id
+           are one bloc and every rule above works on blocs: bloc count = sum of the member teams' connected
+           players, bloc Elo = player-weighted mean, a join to T is allowed when (bloc(T) + 1) - min(other
+           blocs) <= maxDiff (2-/3-team formula by number of blocs), a count redirect goes to a team of the
+           smallest bloc (ties: smallest team). Hook null or all ids distinct = exactly the per-team rules.
 */
 using HarmonyLib;
 using MelonLoader;
@@ -38,12 +43,39 @@ using UnityEngine;
 
 namespace Si_EloMatchmaking
 {
-    /// <summary>Pure placement rules over per-team counts and mean player Elo (the mover is never part of the states).</summary>
+    /// <summary>
+    /// Cross-mod hook for Si_Alliance (0.7.0). GroupOf returns a group id per team; teams with the same id form one
+    /// bloc and the balance rules (join, redirect, !reserve, the volunteer ask, !elo balance) treat each bloc as one
+    /// side. null (the default) or a hook that returns a distinct id per team = plain per-team balance. Si_Alliance
+    /// sets it by reflection while an alliance stands and clears it to null on dissolve / round end. Exceptions from
+    /// the hook are caught; that team then counts as its own bloc (team.Index).
+    /// </summary>
+    public static class AllianceHook
+    {
+        public static Func<Team, int>? GroupOf;
+    }
+
+    /// <summary>
+    /// Pure placement rules over per-team counts and mean player Elo (the mover is never part of the states).
+    /// Since 0.7.0 the balance unit is the bloc: teams with the same non-null TeamState.Group (AllianceHook.GroupOf)
+    /// count as one side (bloc count = sum of member counts, bloc Elo = player-weighted mean). With every Group null
+    /// or distinct each team is its own bloc and every result is bit for bit the 0.6.3 one.
+    /// </summary>
     public static class BalanceRule
     {
         public class TeamState
         {
             public string Name = "";
+            public int Count;
+            public double MeanElo;
+            /// <summary>Bloc id (AllianceHook.GroupOf). Teams with the same non-null Group form one bloc; null = a bloc of its own.</summary>
+            public int? Group;
+        }
+
+        /// <summary>One bloc: member team indices (team order), summed count, player-weighted mean Elo (0 when empty).</summary>
+        public class Bloc
+        {
+            public List<int> Members = new List<int>();
             public int Count;
             public double MeanElo;
         }
@@ -58,22 +90,95 @@ namespace Si_EloMatchmaking
             return Math.Max(0, (int)Math.Ceiling(totalPlayers / div + add));
         }
 
-        /// <summary>Counts after joining `target`: difference to the smallest other team.</summary>
+        // ---- blocs --------------------------------------------------------------
+        public static bool SameBloc(List<TeamState> s, int a, int b) => a == b || (s[a].Group.HasValue && s[a].Group == s[b].Group);
+
+        /// <summary>First index of each bloc, in team order.</summary>
+        static IEnumerable<int> Leaders(List<TeamState> s)
+        {
+            for (int i = 0; i < s.Count; i++)
+            {
+                bool first = true;
+                for (int j = 0; j < i && first; j++) if (SameBloc(s, j, i)) first = false;
+                if (first) yield return i;
+            }
+        }
+
+        /// <summary>Number of blocs (= number of teams without an alliance); feeds MaxDifference's 2-/3-team switch.</summary>
+        public static int BlocTotal(List<TeamState> s) => Leaders(s).Count();
+
+        /// <summary>Players in the bloc of team `i`.</summary>
+        public static int BlocCount(List<TeamState> s, int i)
+        {
+            int n = 0;
+            for (int j = 0; j < s.Count; j++) if (SameBloc(s, i, j)) n += s[j].Count;
+            return n;
+        }
+
+        /// <summary>
+        /// Mean Elo of the bloc of team `lead` with a player of rating rA added to team toA and rB to toB (-1 = none);
+        /// false when the bloc is empty. `keepUntouched`: a single-team bloc nobody joins returns its MeanElo as is
+        /// (Gap/GapAfter did so in 0.6.3, CanSwap recomputed sum / n), which keeps the old arithmetic bit for bit.
+        /// </summary>
+        static bool BlocMean(List<TeamState> s, int lead, int toA, double rA, int toB, double rB, bool keepUntouched, out double mean)
+        {
+            int n = 0, members = 0; double sum = 0; bool touched = false;
+            for (int j = 0; j < s.Count; j++)
+            {
+                if (!SameBloc(s, lead, j)) continue;
+                members++;
+                n += s[j].Count; sum += s[j].MeanElo * s[j].Count;
+                if (j == toA) { n++; sum += rA; touched = true; }
+                if (j == toB) { n++; sum += rB; touched = true; }
+            }
+            mean = 0;
+            if (n == 0) return false;
+            mean = keepUntouched && members == 1 && !touched ? s[lead].MeanElo : sum / n;
+            return true;
+        }
+
+        /// <summary>The blocs with summed counts and weighted mean Elo, in team order (display, volunteer ask).</summary>
+        public static List<Bloc> Blocs(List<TeamState> s)
+        {
+            var list = new List<Bloc>();
+            foreach (int l in Leaders(s))
+            {
+                var b = new Bloc();
+                for (int j = 0; j < s.Count; j++) if (SameBloc(s, l, j)) b.Members.Add(j);
+                b.Count = BlocCount(s, l);
+                b.MeanElo = BlocMean(s, l, -1, 0, -1, 0, true, out double m) ? m : 0;
+                list.Add(b);
+            }
+            return list;
+        }
+
+        // ---- counts -------------------------------------------------------------
+        /// <summary>Counts after joining `target`: its bloc's count + 1 minus the smallest other bloc.</summary>
         static int DiffAfterJoin(List<TeamState> s, int target)
         {
             int min = int.MaxValue;
-            for (int i = 0; i < s.Count; i++) if (i != target && s[i].Count < min) min = s[i].Count;
+            foreach (int l in Leaders(s))
+            {
+                if (SameBloc(s, l, target)) continue;
+                int c = BlocCount(s, l);
+                if (c < min) min = c;
+            }
             if (min == int.MaxValue) return 0;
-            return s[target].Count + 1 - min;
+            return BlocCount(s, target) + 1 - min;
         }
 
         public static bool CountOk(List<TeamState> s, int target, int maxDiff) => DiffAfterJoin(s, target) <= maxDiff;
 
-        /// <summary>Gap between the strongest and the weakest populated team (mean player Elo).</summary>
+        // ---- Elo ------------------------------------------------------------------
+        /// <summary>Gap between the strongest and the weakest populated bloc (mean player Elo).</summary>
         public static double Gap(List<TeamState> s)
         {
             double max = double.NegativeInfinity, min = double.PositiveInfinity;
-            foreach (var t in s) { if (t.Count == 0) continue; if (t.MeanElo > max) max = t.MeanElo; if (t.MeanElo < min) min = t.MeanElo; }
+            foreach (int l in Leaders(s))
+            {
+                if (!BlocMean(s, l, -1, 0, -1, 0, true, out double m)) continue;
+                if (m > max) max = m; if (m < min) min = m;
+            }
             return max > min ? max - min : 0;
         }
 
@@ -81,11 +186,9 @@ namespace Si_EloMatchmaking
         public static double GapAfter(List<TeamState> s, int target, double rating)
         {
             double max = double.NegativeInfinity, min = double.PositiveInfinity;
-            for (int i = 0; i < s.Count; i++)
+            foreach (int l in Leaders(s))
             {
-                int n = s[i].Count + (i == target ? 1 : 0);
-                if (n == 0) continue;
-                double m = i == target ? (s[i].MeanElo * s[i].Count + rating) / n : s[i].MeanElo;
+                if (!BlocMean(s, l, target, rating, -1, 0, true, out double m)) continue;
                 if (m > max) max = m; if (m < min) min = m;
             }
             return max > min ? max - min : 0;
@@ -94,6 +197,8 @@ namespace Si_EloMatchmaking
         /// <summary>
         /// Placement for a join request. `states` exclude the requesting player. `isSwitch` = the player already has a
         /// team (then the only outcomes are Allow and Deny: nobody is redirected against a choice they already made).
+        /// A count redirect goes to a team of the smallest eligible bloc (ties: the smallest team); an Elo redirect only
+        /// to a team outside the target's bloc.
         /// </summary>
         public static Verdict Decide(List<TeamState> states, int target, bool isSwitch, double rating, int maxDiff,
                                      bool eloActive, double eloGapMax, int minPlayers, out int redirectTo, out string reason)
@@ -106,14 +211,14 @@ namespace Si_EloMatchmaking
                 reason = "team imbalance";
                 if (isSwitch) return Verdict.Deny;
                 var eligible = Enumerable.Range(0, states.Count).Where(i => CountOk(states, i, maxDiff)).ToList();
-                if (eligible.Count == 0) eligible.Add(Enumerable.Range(0, states.Count).OrderBy(i => states[i].Count).First());
+                if (eligible.Count == 0) eligible.Add(Enumerable.Range(0, states.Count).OrderBy(i => BlocCount(states, i)).ThenBy(i => states[i].Count).First());
                 redirectTo = eloActive
-                    ? eligible.OrderBy(i => GapAfter(states, i, rating)).ThenBy(i => states[i].Count).First()
-                    : eligible.OrderBy(i => states[i].Count).First();
+                    ? eligible.OrderBy(i => GapAfter(states, i, rating)).ThenBy(i => BlocCount(states, i)).ThenBy(i => states[i].Count).First()
+                    : eligible.OrderBy(i => BlocCount(states, i)).ThenBy(i => states[i].Count).First();
                 return Verdict.Redirect;
             }
 
-            if (eloActive && !isSwitch && states.All(t => t.Count >= minPlayers))
+            if (eloActive && !isSwitch && Leaders(states).All(l => BlocCount(states, l) >= minPlayers))
             {
                 double gap = GapAfter(states, target, rating);
                 if (gap > eloGapMax)
@@ -121,7 +226,7 @@ namespace Si_EloMatchmaking
                     int alt = -1; double altGap = gap;
                     for (int i = 0; i < states.Count; i++)
                     {
-                        if (i == target || !CountOk(states, i, maxDiff)) continue;
+                        if (SameBloc(states, i, target) || !CountOk(states, i, maxDiff)) continue;
                         double g = GapAfter(states, i, rating);
                         if (g < altGap - 1e-9) { alt = i; altGap = g; }
                     }
@@ -138,13 +243,9 @@ namespace Si_EloMatchmaking
             if (toA < 0 || toB < 0 || toA >= states.Count || toB >= states.Count || toA == toB) { why = "teams not in this match"; return false; }
             double before = Gap(states);
             double max = double.NegativeInfinity, min = double.PositiveInfinity;
-            for (int i = 0; i < states.Count; i++)
+            foreach (int l in Leaders(states))
             {
-                int n = states[i].Count; double sum = states[i].MeanElo * n;
-                if (i == toA) { n++; sum += ratingA; }
-                if (i == toB) { n++; sum += ratingB; }
-                if (n == 0) continue;
-                double m = sum / n;
+                if (!BlocMean(states, l, toA, ratingA, toB, ratingB, false, out double m)) continue;
                 if (m > max) max = m; if (m < min) min = m;
             }
             double after = max > min ? max - min : 0;
@@ -247,13 +348,14 @@ namespace Si_EloMatchmaking
             var states = new List<BalanceRule.TeamState>();
             try
             {
+                var hook = AllianceHook.GroupOf;
                 foreach (var setup in strat.BaseTeamSetups)
                 {
                     if (setup == null || setup.Team == null || !strat.GetTeamSetupActive(setup)) continue;
                     bool lost = false; try { lost = setup.GetHasLost(); } catch { }
                     if (lost) continue;
                     teams.Add(setup.Team);
-                    states.Add(new BalanceRule.TeamState { Name = GameApi.Faction(setup.Team) });
+                    states.Add(new BalanceRule.TeamState { Name = GameApi.Faction(setup.Team), Group = hook != null ? GroupOf(hook, setup.Team) : (int?)null });
                 }
                 var sums = new double[states.Count];
                 foreach (var p in GameApi.ConnectedPlayers())
@@ -278,11 +380,25 @@ namespace Si_EloMatchmaking
             return -1;
         }
 
-        static int MaxDiffNow(int activeTeams)
+        static bool _groupOfFailed;
+
+        /// <summary>AllianceHook.GroupOf for one team; a throwing hook counts the team as its own bloc (team.Index), warned once.</summary>
+        static int? GroupOf(Func<Team, int> hook, Team team)
+        {
+            try { return hook(team); }
+            catch (Exception ex)
+            {
+                if (!_groupOfFailed) { _groupOfFailed = true; MelonLogger.Warning("[Elo] Balance: AllianceHook.GroupOf threw, team counted on its own: " + ex.Message); }
+                try { return team.Index; } catch { return null; }
+            }
+        }
+
+        /// <summary>Allowed head-count difference; the 2-/3-team formula follows the number of blocs (an alliance of two of three teams = 2 sides).</summary>
+        static int MaxDiffNow(List<BalanceRule.TeamState> states)
         {
             var (twoDiv, twoAdd, threeDiv, threeAdd, _) = CountPrefs();
             int total = 0; try { total = Player.Players.Count; } catch { }
-            return BalanceRule.MaxDifference(total, activeTeams, twoDiv, twoAdd, threeDiv, threeAdd);
+            return BalanceRule.MaxDifference(total, BalanceRule.BlocTotal(states), twoDiv, twoAdd, threeDiv, threeAdd);
         }
 
         /// <summary>Elo placement is active during the countdown and the first BalanceEloWindowSeconds of a round.</summary>
@@ -296,7 +412,13 @@ namespace Si_EloMatchmaking
             return _round != null && Time.time - _round.startTime <= Cfg.BalanceEloWindowSeconds;
         }
 
-        static string Means(List<BalanceRule.TeamState> s) => string.Join(" / ", s.Where(t => t.Count > 0).Select(t => $"{GameApi.Short(t.Name)} {t.MeanElo:0} ({t.Count})"));
+        /// <summary>"Sol 1520 (5) / Cent 1490 (4)"; allied teams appear as one bloc ("Sol+Cent 1505 (9) / Alien 1500 (8)").</summary>
+        static string Means(List<BalanceRule.TeamState> s) => string.Join(" / ", BalanceRule.Blocs(s).Where(b => b.Count > 0).Select(b => $"{BlocName(s, b)} {b.MeanElo:0} ({b.Count})"));
+
+        static string BlocName(List<BalanceRule.TeamState> s, BalanceRule.Bloc b) => string.Join("+", b.Members.Select(i => GameApi.Short(s[i].Name)));
+
+        /// <summary>The member of a bloc a volunteer should pick: the smallest team (first on ties).</summary>
+        static string BlocJoinTeam(List<BalanceRule.TeamState> s, BalanceRule.Bloc b) => GameApi.Short(s[b.Members.OrderBy(i => s[i].Count).First()].Name);
 
         // ---- the join request ---------------------------------------------------
         [HarmonyPatch(typeof(MP_Strategy), "ProcessNetRPC")]
@@ -352,7 +474,7 @@ namespace Si_EloMatchmaking
 
             bool isSwitch = player.Team != null;
             double rating = Db.PlayerRating(GameApi.SteamId(player));
-            int maxDiff = MaxDiffNow(states.Count);
+            int maxDiff = MaxDiffNow(states);
             bool eloActive = EloPlacementActive(strat);
             var verdict = BalanceRule.Decide(states, tIdx, isSwitch, rating, maxDiff, eloActive, Cfg.BalanceEloGapMax, Cfg.BalanceEloMinPlayersPerTeam, out int redirect, out string reason);
 
@@ -438,7 +560,7 @@ namespace Si_EloMatchmaking
                 if (target < 0) { GameApi.Say(player, $"{r.Faction} is not in this match any more; reservation dropped."); Drop(r, moved: false); continue; }
                 if (ReferenceEquals(player.Team, teams[target])) { Drop(r, moved: true); continue; }
                 // an approved swap partner moves regardless of the counts: the other half restores them
-                if (r.Partner == null && !BalanceRule.CanMove(states, target, Db.PlayerRating(r.Steam), MaxDiffNow(states.Count), Cfg.BalanceEloGapMax, out _)) continue;
+                if (r.Partner == null && !BalanceRule.CanMove(states, target, Db.PlayerRating(r.Steam), MaxDiffNow(states), Cfg.BalanceEloGapMax, out _)) continue;
                 if (MoveReserved(r, player, teams[target])) break;   // one move per tick, counts changed
             }
         }
@@ -499,16 +621,17 @@ namespace Si_EloMatchmaking
             if (EloPlacementActive(strat)) return;
             _lastAsk = Time.time;
             var states = TeamStates(strat, null, out var teams);
-            if (states.Count < 2) return;
-            int maxCount = states.Max(t => t.Count), minCount = states.Min(t => t.Count);
+            var blocs = BalanceRule.Blocs(states);   // allied teams count as one side (AllianceHook)
+            if (blocs.Count < 2) return;
+            int maxCount = blocs.Max(b => b.Count), minCount = blocs.Min(b => b.Count);
             if (maxCount == 0) return;   // nobody on a team (0.6.2 threw here on an empty server)
-            var shortTeam = states.First(t => t.Count == minCount);
+            var shortBloc = blocs.First(b => b.Count == minCount);
             double gap = BalanceRule.Gap(states);
-            var weak = states.Where(t => t.Count > 0).OrderBy(t => t.MeanElo).First();
+            var weak = blocs.Where(b => b.Count > 0).OrderBy(b => b.MeanElo).First();
             if (maxCount - minCount >= 2)
-                GameApi.SayAll($"{GameApi.Short(shortTeam.Name)} is short on players ({minCount} vs {maxCount}). Switch via the team menu or type !reserve {GameApi.Short(shortTeam.Name).ToLowerInvariant()}.");
-            else if (gap > Cfg.BalanceEloGapMax && states.All(t => t.Count >= Cfg.BalanceEloMinPlayersPerTeam))
-                GameApi.SayAll($"{GameApi.Short(weak.Name)} is the weaker team by player Elo ({Means(states)}). Volunteers: !reserve {GameApi.Short(weak.Name).ToLowerInvariant()}.");
+                GameApi.SayAll($"{BlocName(states, shortBloc)} is short on players ({minCount} vs {maxCount}). Switch via the team menu or type !reserve {BlocJoinTeam(states, shortBloc).ToLowerInvariant()}.");
+            else if (gap > Cfg.BalanceEloGapMax && blocs.All(b => b.Count >= Cfg.BalanceEloMinPlayersPerTeam))
+                GameApi.SayAll($"{BlocName(states, weak)} is the weaker team by player Elo ({Means(states)}). Volunteers: !reserve {BlocJoinTeam(states, weak).ToLowerInvariant()}.");
         }
 
         // ---- commands -----------------------------------------------------------
@@ -550,7 +673,7 @@ namespace Si_EloMatchmaking
             var states = TeamStates(strat, caller, out var teams);
             int target = IndexOfTeam(teams, team);
             string why = "team not in this match";
-            if (target >= 0 && BalanceRule.CanMove(states, target, Db.PlayerRating(steam), MaxDiffNow(states.Count), Cfg.BalanceEloGapMax, out why))
+            if (target >= 0 && BalanceRule.CanMove(states, target, Db.PlayerRating(steam), MaxDiffNow(states), Cfg.BalanceEloGapMax, out why))
             {
                 // the spot is open: move right now, like the game's own team menu would
                 MoveReserved(mine, caller, teams[target]);
@@ -578,7 +701,7 @@ namespace Si_EloMatchmaking
             if (strat != null)
             {
                 var states = TeamStates(strat, null, out _);
-                if (states.Count >= 2) GameApi.Say(caller, $"Now: {Means(states)}, gap {BalanceRule.Gap(states):0}, allowed head-count difference {MaxDiffNow(states.Count)}, Elo placement {(EloPlacementActive(strat) ? "active" : "inactive")}.");
+                if (states.Count >= 2) GameApi.Say(caller, $"Now: {Means(states)}, gap {BalanceRule.Gap(states):0}, allowed head-count difference {MaxDiffNow(states)}, Elo placement {(EloPlacementActive(strat) ? "active" : "inactive")}.");
             }
         }
     }
