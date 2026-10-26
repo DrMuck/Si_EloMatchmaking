@@ -120,6 +120,33 @@ Si_BasicTeamBalance's own MelonPreferences values (one config for the counts), a
 is active); `!elo balance on|off` (admin) is the master switch. `BalanceTakeOverJoinHandling=false`
 leaves Si_BasicTeamBalance's join handling in place and keeps only the ask and `!reserve`.
 
+### Alliance blocs (0.7.0, for Si_Alliance)
+
+0.7.0: AllianceHook.GroupOf bloc balance for Si_Alliance.
+
+```csharp
+namespace Si_EloMatchmaking { public static class AllianceHook { public static Func<Team, int>? GroupOf; } }
+```
+
+Si_Alliance (two of three HvHvA teams ally at runtime) sets `GroupOf` by reflection while an alliance
+stands and clears it to `null` when it dissolves. It returns a group id per team; teams with the same
+id form one **bloc**, and every balance rule works on blocs instead of teams:
+
+- bloc count = sum of the member teams' connected players, bloc Elo = player-weighted mean;
+- a join to team T is allowed when `(bloc(T) + 1) - min(other blocs) <= allowed difference` (the same
+  formula as before, applied to blocs; the 2-/3-team divisor follows the number of blocs, so an
+  alliance of two of three teams uses the 2-team values). The lone team may fill up to the allied
+  sum (plus the allowed difference); joins into the allied bloc are refused once it would be more
+  than the allowed difference ahead of the lone team;
+- a redirected fresh joiner goes to a team of the smallest bloc (ties: the smallest team); an Elo
+  redirect never goes to an ally of the requested team;
+- `!reserve`, the swap check, the volunteer ask and `!elo balance` use the same grouping (shown as
+  e.g. `Sol+Cent 1505 (9) / Alien 1500 (8)`).
+
+A throwing hook counts that team as its own bloc (`team.Index`, one warning in the log). With
+`GroupOf == null` or a distinct id per team every result is bit for bit the 0.6.3 one (checked
+against the 0.6.3 `BalanceRule` source on 300k random states plus the harness cases below).
+
 Harness cases (`BalanceRule`, defaults, allowed difference 1): a fresh joiner asking the fuller team
 (5 vs 4) goes to the smaller one; equal counts keep the pick; a switcher into the fuller team is
 denied, into the smaller one allowed; a 1800 joiner asking the already stronger side (1560 vs 1480,
@@ -205,7 +232,7 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo pass` | all | toggle "seat someone else when a peer (within `PassGap` 150) would take my seat" (persisted) |
 | `!elo vote <any|low|mid|midhigh|high>` | all | vote the tier of the next commander matchup (needs a quorum, one round) |
 | `!elo status` | all | switches, next tier, applicant pool and projected matchup during the countdown |
-| `!elo balance` | all | team balance state: mean player Elo per team, allowed head-count difference, Elo placement active? |
+| `!elo balance` | all | team balance state: mean player Elo per team (allied teams as one bloc, 0.7.0), allowed head-count difference, Elo placement active? |
 | `!reserve <sol|cent|alien>` / `!reserve off` / `!reserve` | all | switch team at once when counts and Elo allow it, else queued and moved the moment a spot opens |
 | `!elo on` / `off` (also `!elo matchmaking on\|off`) | admin (Commander power) | master switch; off = vanilla lottery, ratings still tracked |
 | `!elo reload` | admin | reload ratings.json |
