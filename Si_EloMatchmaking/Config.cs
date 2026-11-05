@@ -103,6 +103,9 @@ namespace Si_EloMatchmaking
         // 0.6.3: BalanceReserveAtRespawnOnly removed; !reserve moves at once (a stale key in the JSON is ignored).
         /// <summary>A team-menu switch denied by the head counts books a !reserve spot for that team (red notice, moved when it opens) instead of only bouncing the player.</summary>
         public bool BalanceAutoReserveOnDeny = true;
+        /// <summary>Denied team-menu presses within the window that book the spot; a single press only denies with a hint.</summary>
+        public int BalanceAutoReservePresses = 3;
+        public int BalanceAutoReserveWindowSeconds = 20;
         /// <summary>A team with no Headquarters/Nest standing or under construction counts as out of the round (excluded from head counts, the volunteer ask, redirects and reservations) even when the game has not flagged it as lost yet.</summary>
         public bool BalanceTeamOutWithoutRoot = true;
 

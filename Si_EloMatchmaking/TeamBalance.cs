@@ -289,6 +289,8 @@ namespace Si_EloMatchmaking
         static readonly List<Reservation> _reserve = new List<Reservation>();
         /// <summary>Last denial chat per Steam ID: a player hammering the team button gets the red notice every 2 s, not 20 times.</summary>
         static readonly Dictionary<string, float> _denyChatAt = new Dictionary<string, float>();
+        /// <summary>Denied presses per Steam ID (count, time of the first one): the spot is booked only when the player keeps pressing.</summary>
+        static readonly Dictionary<string, (int count, float first)> _denyPresses = new Dictionary<string, (int, float)>();
         const string Red = "<color=#FF2A2A>", Green = "<color=#2EDB4F>", End = "</color>";
         /// <summary>Teams already logged as out of this round (cleared with the reserve list at round start/end).</summary>
         static readonly HashSet<string> _outLogged = new HashSet<string>();
@@ -562,17 +564,25 @@ namespace Si_EloMatchmaking
                         // 0.7.2: a denied switch books the spot instead of just bouncing (players pressed the button 20+ times,
                         // each press costing them their unit); the mover is moved by ProcessReserve the moment the counts allow it.
                         string steam = GameApi.SteamId(player), tf = GameApi.Faction(target);
-                        bool reserved = Cfg.BalanceAutoReserveOnDeny && _round != null;
+                        // a single press is just denied; the spot is booked when the player keeps pressing (0.7.4)
+                        int presses = 1;
+                        if (_denyPresses.TryGetValue(steam, out var dp) && Time.time - dp.first <= Cfg.BalanceAutoReserveWindowSeconds) presses = dp.count + 1;
+                        _denyPresses[steam] = (presses, presses == 1 ? Time.time : dp.first);
+                        bool already = _reserve.Any(r => r.Steam == steam && r.Faction == tf);
+                        bool reserved = Cfg.BalanceAutoReserveOnDeny && _round != null && (already || presses >= Math.Max(1, Cfg.BalanceAutoReservePresses));
                         int pos = reserved ? Upsert(steam, player.PlayerName ?? steam, tf) : 0;
-                        MelonLogger.Msg($"[Elo] Balance: {player.PlayerName} -> {tf} denied ({reason})" + (reserved ? $"; spot reserved (position {pos})." : "."));
+                        MelonLogger.Msg($"[Elo] Balance: {player.PlayerName} -> {tf} denied ({reason}; press {presses})" + (reserved ? $"; spot reserved (position {pos})." : "."));
                         if (!_denyChatAt.TryGetValue(steam, out float last) || Time.time - last >= 2f)
                         {
                             _denyChatAt[steam] = Time.time;
                             string free = FreeTeams(states, teams, player, tIdx, maxDiff);
+                            int more = Math.Max(1, Cfg.BalanceAutoReservePresses) - presses;
                             string msg = $"{Red}No spot on {GameApi.Short(tf)} right now{End} ({reason}). "
                                 + (reserved
                                     ? $"{Red}A spot on {GameApi.Short(tf)} is RESERVED for you (position {pos}): you are moved there automatically the moment it opens. No need to press again; !reserve off cancels.{End}"
-                                    : $"{Red}Try again later.{End}")
+                                    : Cfg.BalanceAutoReserveOnDeny && _round != null
+                                        ? $"Press {more} more time{(more == 1 ? "" : "s")} or type !reserve {GameApi.Short(tf).ToLowerInvariant()} to reserve a spot and be moved automatically when it opens."
+                                        : $"{Red}Try again later.{End}")
                                 + (free.Length > 0 ? $" Free right now: {free}." : "");
                             GameApi.Say(player, msg);
                         }
@@ -656,6 +666,8 @@ namespace Si_EloMatchmaking
         {
             _reserve.Clear();
             _outLogged.Clear();
+            _denyPresses.Clear();
+            _denyChatAt.Clear();
             _lastAsk = Time.time;
         }
 

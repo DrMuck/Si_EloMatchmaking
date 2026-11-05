@@ -133,6 +133,8 @@ to it, switches between the two live teams denied because the dead team had 0). 
 the game flags it as lost OR (`BalanceTeamOutWithoutRoot`) it has no Headquarters/Nest standing or under construction;
 logged once per round ("<team> is out of this round (<rule>)"). A fresh joiner picking an out team is placed like a
 redirect, a switcher is told, `!reserve` refuses it, `!elo balance` lists the out teams.
+0.7.4: the auto-reservation of 0.7.2 is booked only when the player keeps pressing (`BalanceAutoReservePresses` 3 within
+`BalanceAutoReserveWindowSeconds` 20); a single denied press shows "Press 2 more times or type !reserve cent ...".
 
 ```csharp
 namespace Si_EloMatchmaking { public static class AllianceHook { public static Func<Team, int>? GroupOf; } }

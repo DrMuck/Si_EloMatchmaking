@@ -50,7 +50,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.7.3";
+        public const string Version = "0.7.4";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();
