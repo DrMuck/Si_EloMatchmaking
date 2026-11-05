@@ -198,7 +198,10 @@ namespace Si_EloMatchmaking
                     .Picker("/reserve", "Switch team", "Move to another team at once when the head counts and the Elo balance allow it; otherwise you are queued and moved the moment a spot opens.", admin: false, arg: "team")
                     .Action("/reserve off", "Drop reservation", "Leave the reserve list.")
                     .Action("/elo balance status", "Team balance status", "Mean player Elo per team, the allowed head-count difference and whether Elo placement is active right now.")
-                    .Picker("/elo seat", "Pin commander", "Pick the faction next to the player: that player commands it at the next round start, ahead of the Elo pick (one round).", admin: true, arg: "team,player");
+                    // "seat,player": the client lists commander seats, not FPS teams (who commands what now, who is pinned);
+                    // the choices carry the pins so the client can mark them (value = faction, label = player name).
+                    .Picker("/elo seat", "Pin commander", "Pick the faction next to the player: that player commands it at the next round start, ahead of the Elo pick (one round). The row shows who commands what right now and who is already pinned; a pin on a seated faction replaces its commander at the round start (or at once with Force pins now).", admin: true, arg: "seat,player",
+                        _pins.Select(p => (p.Key, p.Value.Name)).ToArray());
                 if (_pins.Count > 0)
                     x.Picker("/elo unseat", "Drop one pin", "Drop a single pinned seat.", admin: true, arg: "choice",
                         _pins.Select(p => (p.Key, $"{GameApi.Short(p.Key)}: {p.Value.Name}")).ToArray());

@@ -123,6 +123,7 @@ leaves Si_BasicTeamBalance's join handling in place and keeps only the ask and `
 ### Alliance blocs (0.7.0, for Si_Alliance)
 
 0.7.0: AllianceHook.GroupOf bloc balance for Si_Alliance.
+0.7.1: `/elo seat` in Si_ModUI shows commander seats and pins per row (client 1.5.5) instead of FPS teams.
 
 ```csharp
 namespace Si_EloMatchmaking { public static class AllianceHook { public static Func<Team, int>? GroupOf; } }
