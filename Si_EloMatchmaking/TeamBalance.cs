@@ -108,6 +108,14 @@ namespace Si_EloMatchmaking
         public static int BlocTotal(List<TeamState> s) => Leaders(s).Count();
 
         /// <summary>Players in the bloc of team `i`.</summary>
+        /// <summary>Where a fresh joiner goes when their pick is not available: a team the counts allow, smallest bloc first; else the smallest team.</summary>
+        public static int BestFreshTeam(List<TeamState> s, int maxDiff)
+        {
+            var eligible = Enumerable.Range(0, s.Count).Where(i => CountOk(s, i, maxDiff)).ToList();
+            if (eligible.Count == 0) eligible = Enumerable.Range(0, s.Count).ToList();
+            return eligible.OrderBy(i => BlocCount(s, i)).ThenBy(i => s[i].Count).First();
+        }
+
         public static int BlocCount(List<TeamState> s, int i)
         {
             int n = 0;
@@ -282,6 +290,8 @@ namespace Si_EloMatchmaking
         /// <summary>Last denial chat per Steam ID: a player hammering the team button gets the red notice every 2 s, not 20 times.</summary>
         static readonly Dictionary<string, float> _denyChatAt = new Dictionary<string, float>();
         const string Red = "<color=#FF2A2A>", Green = "<color=#2EDB4F>", End = "</color>";
+        /// <summary>Teams already logged as out of this round (cleared with the reserve list at round start/end).</summary>
+        static readonly HashSet<string> _outLogged = new HashSet<string>();
 
         // ---- set-up ---------------------------------------------------------
         static void InitBalance()
@@ -355,8 +365,7 @@ namespace Si_EloMatchmaking
                 foreach (var setup in strat.BaseTeamSetups)
                 {
                     if (setup == null || setup.Team == null || !strat.GetTeamSetupActive(setup)) continue;
-                    bool lost = false; try { lost = setup.GetHasLost(); } catch { }
-                    if (lost) continue;
+                    if (TeamOut(strat, setup.Team, out _)) continue;
                     teams.Add(setup.Team);
                     states.Add(new BalanceRule.TeamState { Name = GameApi.Faction(setup.Team), Group = hook != null ? GroupOf(hook, setup.Team) : (int?)null });
                 }
@@ -375,6 +384,51 @@ namespace Si_EloMatchmaking
             }
             catch (Exception ex) { MelonLogger.Warning("[Elo] Balance TeamStates: " + ex.Message); }
             return states;
+        }
+
+        /// <summary>Is the team out of this round for balance purposes? The game's own flag (no critical structure left) OR, with
+        /// BalanceTeamOutWithoutRoot, no Headquarters/Nest standing or under construction (what Si_HQlessHumansLose eliminates on).
+        /// Logged once per round per team so the log shows which rule fired.</summary>
+        static bool TeamOut(MP_Strategy strat, Team team, out string why)
+        {
+            why = "";
+            try
+            {
+                bool begun = false; try { begun = GameMode.CurrentGameMode != null && GameMode.CurrentGameMode.GameBegun; } catch { }
+                if (!begun) return false;
+                var setup = strat.BaseTeamSetups.FirstOrDefault(s => s != null && ReferenceEquals(s.Team, team));
+                bool lost = false; try { lost = setup != null && setup.GetHasLost(); } catch (Exception ex) { MelonLogger.Warning("[Elo] GetHasLost: " + ex.Message); }
+                if (lost) why = "game flags it as lost";
+                else if (Cfg.BalanceTeamOutWithoutRoot && !HasRootStructure(team)) why = "no HQ/Nest standing or under construction";
+                if (why.Length == 0) return false;
+                string f = GameApi.Faction(team);
+                if (_outLogged.Add(f)) MelonLogger.Msg($"[Elo] Balance: {f} is out of this round ({why}); excluded from head counts, asks and reservations.");
+                return true;
+            }
+            catch (Exception ex) { MelonLogger.Warning("[Elo] TeamOut: " + ex.Message); return false; }
+        }
+
+        /// <summary>A Headquarters (humans) / Nest (aliens) that is not destroyed, or a construction site of one.</summary>
+        static bool HasRootStructure(Team team)
+        {
+            string root = GameApi.IsHumanFaction(GameApi.Faction(team)) ? "Headquarters" : "Nest";
+            try
+            {
+                foreach (var s in team.Structures)
+                {
+                    if (s == null) continue;
+                    bool destroyed = false; try { destroyed = s.DamageManager != null && s.DamageManager.IsDestroyed; } catch { }
+                    if (!destroyed && s.ToString().Contains(root)) return true;
+                }
+            }
+            catch (Exception ex) { MelonLogger.Warning("[Elo] HasRootStructure: " + ex.Message); return true; }
+            try
+            {
+                foreach (var c in ConstructionSite.ConstructionSites)
+                    if (c != null && ReferenceEquals(c.Team, team) && c.ToString().Contains(root)) return true;
+            }
+            catch (Exception ex) { MelonLogger.Warning("[Elo] HasRootStructure sites: " + ex.Message); return true; }
+            return false;
         }
 
         static int IndexOfTeam(List<Team> teams, Team t)
@@ -469,16 +523,33 @@ namespace Si_EloMatchmaking
 
             var states = TeamStates(strat, player, out var teams);
             int tIdx = IndexOfTeam(teams, target);
+            bool isSwitch = player.Team != null;
+            double rating = Db.PlayerRating(GameApi.SteamId(player));
+            int maxDiff = MaxDiffNow(states);
+            bool eloActive = EloPlacementActive(strat);
+            // 0.7.3: the pick is a team that is out of this round (no HQ/Nest left): a fresh joiner goes where a redirect
+            // would send them, a switcher is told; before, both were let through unchecked (tIdx < 0).
+            if (tIdx < 0 && !currentInvalid && states.Count >= 1 && TeamOut(strat, target, out string outWhy))
+            {
+                string tf = GameApi.Faction(target);
+                if (isSwitch)
+                {
+                    GameApi.Say(player, $"{Red}{GameApi.Short(tf)} is out of this round{End} ({outWhy}).");
+                    MelonLogger.Msg($"[Elo] Balance: {player.PlayerName} -> {tf} denied (team is out: {outWhy}).");
+                    SendClearRequest(steam64, channel);
+                    return true;
+                }
+                var to = teams[BalanceRule.BestFreshTeam(states, maxDiff)];
+                HelperMethods.ReplyToCommand_Player(player, $" was placed on {GameApi.TeamColor(to)}{to.TeamShortName}</color> ({GameApi.Short(tf)} is out of this round)");
+                MelonLogger.Msg($"[Elo] Balance: {player.PlayerName} asked {tf} (out: {outWhy}), placed on {GameApi.Faction(to)} ({Means(states)}).");
+                Place(player, to);
+                return true;
+            }
             if (currentInvalid || tIdx < 0 || states.Count < 2)
             {
                 Place(player, target);
                 return true;
             }
-
-            bool isSwitch = player.Team != null;
-            double rating = Db.PlayerRating(GameApi.SteamId(player));
-            int maxDiff = MaxDiffNow(states);
-            bool eloActive = EloPlacementActive(strat);
             var verdict = BalanceRule.Decide(states, tIdx, isSwitch, rating, maxDiff, eloActive, Cfg.BalanceEloGapMax, Cfg.BalanceEloMinPlayersPerTeam, out int redirect, out string reason);
 
             switch (verdict)
@@ -584,6 +655,7 @@ namespace Si_EloMatchmaking
         static void ClearReserve()
         {
             _reserve.Clear();
+            _outLogged.Clear();
             _lastAsk = Time.time;
         }
 
@@ -703,6 +775,7 @@ namespace Si_EloMatchmaking
             if (faction == null || strat == null) { GameApi.Say(caller, "Usage: !reserve sol|cent|alien, !reserve off"); return; }
             var team = GameApi.ActiveTeams(strat).FirstOrDefault(t => GameApi.Faction(t) == faction);
             if (team == null) { GameApi.Say(caller, $"{faction} is not in this match."); return; }
+            if (TeamOut(strat, team, out string outWhy)) { GameApi.Say(caller, $"{GameApi.Short(faction)} is out of this round ({outWhy})."); return; }
             if (ReferenceEquals(caller.Team, team)) { GameApi.Say(caller, $"You are already on {GameApi.Short(faction)}."); return; }
             if (_round == null) { GameApi.Say(caller, "No round running; pick the team in the team menu."); return; }
             int pos = Upsert(steam, caller.PlayerName ?? steam, faction);
@@ -733,7 +806,7 @@ namespace Si_EloMatchmaking
                 return;
             }
             var (twoDiv, twoAdd, threeDiv, threeAdd, src) = CountPrefs();
-            GameApi.Say(caller, $"Team balance {(Cfg.BalanceEnabled ? "ON" : "OFF")}: counts {src} (2-team /{twoDiv}+{twoAdd}, 3-team /{threeDiv}+{threeAdd}), Elo gap limit {Cfg.BalanceEloGapMax:0} with >= {Cfg.BalanceEloMinPlayersPerTeam} per team during the countdown + first {Cfg.BalanceEloWindowSeconds}s; reserve list: {_reserve.Count}.");
+            GameApi.Say(caller, $"Team balance {(Cfg.BalanceEnabled ? "ON" : "OFF")}: counts {src} (2-team /{twoDiv}+{twoAdd}, 3-team /{threeDiv}+{threeAdd}), Elo gap limit {Cfg.BalanceEloGapMax:0} with >= {Cfg.BalanceEloMinPlayersPerTeam} per team during the countdown + first {Cfg.BalanceEloWindowSeconds}s; reserve list: {_reserve.Count}" + (_outLogged.Count > 0 ? $"; out of this round: {string.Join(", ", _outLogged)}" : "") + ".");
             if (strat != null)
             {
                 var states = TeamStates(strat, null, out _);
