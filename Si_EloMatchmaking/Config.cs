@@ -105,7 +105,7 @@ namespace Si_EloMatchmaking
         public bool BalanceAutoReserveOnDeny = true;
         /// <summary>Denied team-menu presses within the window that book the spot; a single press only denies with a hint.</summary>
         public int BalanceAutoReservePresses = 3;
-        public int BalanceAutoReserveWindowSeconds = 20;
+        public int BalanceAutoReserveWindowSeconds = 15;
         /// <summary>A team with no Headquarters/Nest standing or under construction counts as out of the round (excluded from head counts, the volunteer ask, redirects and reservations) even when the game has not flagged it as lost yet.</summary>
         public bool BalanceTeamOutWithoutRoot = true;
 
