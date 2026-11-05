@@ -124,6 +124,10 @@ leaves Si_BasicTeamBalance's join handling in place and keeps only the ask and `
 
 0.7.0: AllianceHook.GroupOf bloc balance for Si_Alliance.
 0.7.1: `/elo seat` in Si_ModUI shows commander seats and pins per row (client 1.5.5) instead of FPS teams.
+0.7.2: a team-menu switch denied by the head counts books a `!reserve` spot for that team (`BalanceAutoReserveOnDeny`):
+red chat notice at most every 2 s per player ("a spot is RESERVED for you, you are moved the moment it opens", plus the
+teams that are free right now), log line "denied (team imbalance); spot reserved (position n)", green notice when the
+move happens. Before, players pressed the team button 20+ times (every press costs the unit) and saw the denial once.
 
 ```csharp
 namespace Si_EloMatchmaking { public static class AllianceHook { public static Func<Team, int>? GroupOf; } }

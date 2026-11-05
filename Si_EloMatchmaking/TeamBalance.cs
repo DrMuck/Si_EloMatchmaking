@@ -279,6 +279,9 @@ namespace Si_EloMatchmaking
             public string? Partner;
         }
         static readonly List<Reservation> _reserve = new List<Reservation>();
+        /// <summary>Last denial chat per Steam ID: a player hammering the team button gets the red notice every 2 s, not 20 times.</summary>
+        static readonly Dictionary<string, float> _denyChatAt = new Dictionary<string, float>();
+        const string Red = "<color=#FF2A2A>", Green = "<color=#2EDB4F>", End = "</color>";
 
         // ---- set-up ---------------------------------------------------------
         static void InitBalance()
@@ -484,14 +487,27 @@ namespace Si_EloMatchmaking
                     Place(player, target);
                     return true;
                 case BalanceRule.Verdict.Deny:
-                    if (!ReferenceEquals(_lastBalanceChat, player))
                     {
-                        HelperMethods.ReplyToCommand_Player(player, "'s switch was denied due to team imbalance");
-                        _lastBalanceChat = player;
+                        // 0.7.2: a denied switch books the spot instead of just bouncing (players pressed the button 20+ times,
+                        // each press costing them their unit); the mover is moved by ProcessReserve the moment the counts allow it.
+                        string steam = GameApi.SteamId(player), tf = GameApi.Faction(target);
+                        bool reserved = Cfg.BalanceAutoReserveOnDeny && _round != null;
+                        int pos = reserved ? Upsert(steam, player.PlayerName ?? steam, tf) : 0;
+                        MelonLogger.Msg($"[Elo] Balance: {player.PlayerName} -> {tf} denied ({reason})" + (reserved ? $"; spot reserved (position {pos})." : "."));
+                        if (!_denyChatAt.TryGetValue(steam, out float last) || Time.time - last >= 2f)
+                        {
+                            _denyChatAt[steam] = Time.time;
+                            string free = FreeTeams(states, teams, player, tIdx, maxDiff);
+                            string msg = $"{Red}No spot on {GameApi.Short(tf)} right now{End} ({reason}). "
+                                + (reserved
+                                    ? $"{Red}A spot on {GameApi.Short(tf)} is RESERVED for you (position {pos}): you are moved there automatically the moment it opens. No need to press again; !reserve off cancels.{End}"
+                                    : $"{Red}Try again later.{End}")
+                                + (free.Length > 0 ? $" Free right now: {free}." : "");
+                            GameApi.Say(player, msg);
+                        }
+                        SendClearRequest(steam64, channel);
+                        return true;
                     }
-                    MelonLogger.Msg($"[Elo] Balance: {player.PlayerName} -> {GameApi.Faction(target)} denied ({reason}).");
-                    SendClearRequest(steam64, channel);
-                    return true;
                 default:
                     {
                         var to = teams[redirect];
@@ -512,6 +528,31 @@ namespace Si_EloMatchmaking
         {
             player.Team = team;
             NetworkLayer.SendPlayerSelectTeam(player, team);
+        }
+
+        /// <summary>Teams (other than the player's own and the denied one) the head counts would let the player join now, coloured, comma separated.</summary>
+        static string FreeTeams(List<BalanceRule.TeamState> states, List<Team> teams, Player player, int denied, int maxDiff)
+        {
+            var free = new List<string>();
+            for (int i = 0; i < teams.Count; i++)
+            {
+                if (i == denied || ReferenceEquals(teams[i], player.Team)) continue;
+                if (BalanceRule.CountOk(states, i, maxDiff)) free.Add(GameApi.Colored(teams[i], GameApi.Short(GameApi.Faction(teams[i]))));
+            }
+            return string.Join(", ", free);
+        }
+
+        /// <summary>Add the player's reservation or retarget it; returns the 1-based queue position. A changed wish drops a swap approval on both sides.</summary>
+        static int Upsert(string steam, string name, string faction)
+        {
+            var mine = _reserve.FirstOrDefault(r => r.Steam == steam);
+            if (mine == null) { mine = new Reservation { Steam = steam, Name = name, Faction = faction, Since = Time.time }; _reserve.Add(mine); }
+            else if (mine.Faction != faction)
+            {
+                if (mine.Partner != null) { var other = _reserve.FirstOrDefault(x => x.Steam == mine.Partner); if (other != null) other.Partner = null; mine.Partner = null; }
+                mine.Faction = faction; mine.Since = Time.time;
+            }
+            return _reserve.IndexOf(mine) + 1;
         }
 
         static void SendClearRequest(ulong steam64, int channel)
@@ -574,6 +615,7 @@ namespace Si_EloMatchmaking
             Drop(r, moved: true);
             MelonLogger.Msg($"[Elo] Reserve: {player.PlayerName} moved to {r.Faction} after {Time.time - r.Since:0}s" + (partner.Length > 0 ? $" (swap with {partner})" : "") + ".");
             GameApi.SayAll($"{GameApi.Colored(team, player.PlayerName)} moves to {GameApi.Short(r.Faction)} (" + (partner.Length > 0 ? $"swap with {partner}" : "reserved spot") + ").");
+            GameApi.Say(player, $"{Green}Your reserved spot on {GameApi.Short(r.Faction)} opened: you have been moved.{End}");
             return true;
         }
 
@@ -663,13 +705,8 @@ namespace Si_EloMatchmaking
             if (team == null) { GameApi.Say(caller, $"{faction} is not in this match."); return; }
             if (ReferenceEquals(caller.Team, team)) { GameApi.Say(caller, $"You are already on {GameApi.Short(faction)}."); return; }
             if (_round == null) { GameApi.Say(caller, "No round running; pick the team in the team menu."); return; }
-            if (mine != null)
-            {
-                // a changed wish drops a swap approval on both sides (Drop clears the partner's); the reservation itself stays
-                if (mine.Faction != faction && mine.Partner != null) { Drop(mine, moved: false); mine.Partner = null; _reserve.Add(mine); }
-                mine.Faction = faction; mine.Since = Time.time;
-            }
-            else { mine = new Reservation { Steam = steam, Name = caller.PlayerName ?? steam, Faction = faction, Since = Time.time }; _reserve.Add(mine); }
+            int pos = Upsert(steam, caller.PlayerName ?? steam, faction);
+            mine = _reserve.First(r => r.Steam == steam);
             var states = TeamStates(strat, caller, out var teams);
             int target = IndexOfTeam(teams, team);
             string why = "team not in this match";
@@ -679,7 +716,6 @@ namespace Si_EloMatchmaking
                 MoveReserved(mine, caller, teams[target]);
                 return;
             }
-            int pos = _reserve.FindIndex(r => r.Steam == steam) + 1;
             MelonLogger.Msg($"[Elo] Reserve: {caller.PlayerName} queued for {faction} (position {pos}): {why}.");
             GameApi.Say(caller, $"Reserved a spot on {GameApi.Short(faction)} (position {pos}); waiting: {why}. You move the moment it is possible. !reserve off to cancel.");
         }
