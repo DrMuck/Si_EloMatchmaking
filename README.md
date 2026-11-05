@@ -128,6 +128,11 @@ leaves Si_BasicTeamBalance's join handling in place and keeps only the ask and `
 red chat notice at most every 2 s per player ("a spot is RESERVED for you, you are moved the moment it opens", plus the
 teams that are free right now), log line "denied (team imbalance); spot reserved (position n)", green notice when the
 move happens. Before, players pressed the team button 20+ times (every press costs the unit) and saw the denial once.
+0.7.3: a team defeated in a 3-way stayed in the head counts ("Cent is short on players (0 vs 14)", joiners redirected
+to it, switches between the two live teams denied because the dead team had 0). `TeamOut()` now excludes a team when
+the game flags it as lost OR (`BalanceTeamOutWithoutRoot`) it has no Headquarters/Nest standing or under construction;
+logged once per round ("<team> is out of this round (<rule>)"). A fresh joiner picking an out team is placed like a
+redirect, a switcher is told, `!reserve` refuses it, `!elo balance` lists the out teams.
 
 ```csharp
 namespace Si_EloMatchmaking { public static class AllianceHook { public static Func<Team, int>? GroupOf; } }
