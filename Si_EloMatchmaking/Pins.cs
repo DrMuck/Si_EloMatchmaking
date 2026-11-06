@@ -196,6 +196,7 @@ namespace Si_EloMatchmaking
                  .Value("/elo tierfrom 3", "Full server from (players)", "Player count at which the full-server tier starts (counted as the larger of now and the end of the previous round).", admin: true, current: rows[2].Players.ToString());
                 x.Action("/elo tiers", "Tier table (text)", "Shows the table as players=tier; the chat form !elo tiers 0=any,10=midhigh,20=high sets it in one go.", admin: true)
                     .Picker("/reserve", "Switch team", "Move to another team at once when the head counts and the Elo balance allow it; otherwise you are queued and moved the moment a spot opens.", admin: false, arg: "team")
+                    .Picker("/reserve commander", "Take a free commander seat", "During a round: move to that team and take its commander seat at once when it has no commander. A free commander seat is not limited by the team head counts.", admin: false, arg: "team")
                     .Action("/reserve off", "Drop reservation", "Leave the reserve list.")
                     .Action("/elo balance status", "Team balance status", "Mean player Elo per team, the allowed head-count difference and whether Elo placement is active right now.")
                     // "seat,player": the client lists commander seats, not FPS teams (who commands what now, who is pinned);

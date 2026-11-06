@@ -20,8 +20,11 @@
    the loss.
  - Team balance (TeamBalance.cs): takes over the join-team handling from Si_BasicTeamBalance (same
    head-count rule, its preference values), places fresh joiners Elo-aware during the countdown
-   and the first minute, never moves anyone mid-round, asks for volunteers, and !reserve queues a
+   and the first minute, never moves anyone mid-round against their choice, asks for volunteers, and !reserve queues a
    player for a spot on another team (moved at once when counts and Elo allow it, else when a spot opens).
+   Since 0.7.5 a free commander seat beats the head counts: the pick moves its commanders regardless, the countdown
+   remembers the team a redirected applicant asked for, mid-round a switch to a team without commander is let through
+   with a claim on the seat, and !reserve <team> commander takes such a seat at once.
    Since 0.7.0 allied teams (AllianceHook.GroupOf, set by Si_Alliance) are balanced as one bloc.
 
  How it hooks the game (0.9.47 and 1.0.2, Mono server)
@@ -50,7 +53,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.7.4";
+        public const string Version = "0.7.5";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();
@@ -164,6 +167,7 @@ namespace Si_EloMatchmaking
             _preRoundActive = false;
             ClearReserve();
             if (Cfg.Enabled || HasPins) RunMatchmaking(strat);   // admin pins run the pick for this one round even while OFF
+            _askedTeam.Clear();   // countdown wishes (TeamBalance.cs) are for this one pick
             StartTracker(strat);
             if (Cfg.PlayerBalanceReport) ReportPlayerBalance(strat);
         }
@@ -206,6 +210,7 @@ namespace Si_EloMatchmaking
                     Name = p.PlayerName ?? steam,
                     AppliedTeam = team,
                     AppliedFaction = GameApi.Faction(team),
+                    AskedTeam = AskedSeatTeam(steam, team, seats),
                     Rating = Db.CommanderRating(steam),
                     Games = Db.CommanderGames(steam),
                     Sigma = Db.Sigma(Db.CommanderGames(steam)),
@@ -274,7 +279,10 @@ namespace Si_EloMatchmaking
             {
                 if (c.Player == null) continue;
                 bool moved = false;
-                if (c.Player.Team != seat.Team)
+                // The seat beats the head counts: a commander chosen for another team is always moved (one person; the
+                // seat matters more than a +1 imbalance). GameApi.MovePlayer is a direct server-side move and never
+                // passes through the REQUEST_JOIN_TEAM balance handler (TeamBalance.cs).
+                if (!ReferenceEquals(c.Player.Team, seat.Team))
                 {
                     if (!GameApi.MovePlayer(c.Player, seat.Team))
                     {
@@ -294,16 +302,36 @@ namespace Si_EloMatchmaking
             foreach (var c in cands.Concat(stepped))
                 if (!seated.Any(s => s.cand == c)) GameApi.RespawnIfUnitless(c.Player);
 
+            TellUnseatedAboutFreeSeats(seats, cands, seated.Select(s => s.seat).ToList(), seated.Select(s => s.cand).ToList());
+
             _lastRoundCommanders = new HashSet<string>(seated.Select(s => s.cand.Steam));
             Db.UpdateStreaks(_lastRoundCommanders);
             Db.UpdateWaiting(_lastRoundCommanders, cands.Where(c => !_lastRoundCommanders.Contains(c.Steam)).Select(c => c.Steam));
             Db.Save();
 
-            MelonLogger.Msg("[Elo] Seated: " + string.Join(", ", seated.Select(s => $"{s.cand.Name}({s.cand.Rating:0}) -> {s.seat.Team.TeamShortName}{(s.moved ? " [moved]" : "")}")) +
+            MelonLogger.Msg("[Elo] Seated: " + string.Join(", ", seated.Select(s => $"{s.cand.Name}({s.cand.Rating:0}) -> {s.seat.Team.TeamShortName}{(s.moved ? (ReferenceEquals(s.cand.AskedTeam, s.seat.Team) ? " [moved, asked for it]" : " [moved]") : "")}")) +
                             (best.Unfilled > 0 ? $"; {best.Unfilled} seat(s) AI" : "") + $"; tier {tierName} ({tierReason})" +
                             (stepped.Count > 0 ? "; passed: " + string.Join(", ", stepped.Select(s => s.Name)) : ""));
 
             if (Cfg.AnnounceMatchup) AnnounceMatchup(seats, seated, tierName, tierReason);
+        }
+
+        /// <summary>
+        /// 0.7.5: applicants the pick could not seat while a seat stays with the AI (they are not flex for it, e.g. three Alien
+        /// applicants with Sol and Centauri empty). Logged, and each is told that !reserve &lt;team&gt; commander takes a free
+        /// seat mid-round over the head counts.
+        /// </summary>
+        static void TellUnseatedAboutFreeSeats(List<Seat> seats, List<Candidate> cands, List<Seat> filled, List<Candidate> seatedCands)
+        {
+            var free = seats.Where(s => !filled.Contains(s)).ToList();
+            var waiting = cands.Where(c => c.Player != null && !seatedCands.Contains(c)).ToList();
+            if (free.Count == 0 || waiting.Count == 0) return;
+            MelonLogger.Msg("[Elo] Unseated applicants: " + string.Join(", ", waiting.Select(c => $"{c.Name}@{GameApi.Short(c.AppliedFaction)} flex {Db.FlexLabel(c.Steam)}"))
+                            + "; AI seats: " + string.Join(", ", free.Select(s => GameApi.Short(s.Faction))) + (Cfg.BalanceCommanderSeatException ? " (told: !reserve <team> commander)." : "."));
+            if (!Cfg.BalanceCommanderSeatException) return;
+            string list = string.Join(", ", free.Select(s => GameApi.Colored(s.Team, GameApi.Short(s.Faction))));
+            foreach (var c in waiting)
+                GameApi.Say(c.Player, $"No commander seat for you this round, but {list} {(free.Count == 1 ? "has" : "have")} no commander: type !reserve {GameApi.Short(free[0].Faction).ToLowerInvariant()} commander to take it now (a free commander seat is not limited by the team head counts). With !flex the pick can seat you there at the start.");
         }
 
         static void AnnounceMatchup(List<Seat> seats, List<(Seat seat, Candidate cand, bool moved)> seated, string tierName, string tierReason)
@@ -499,6 +527,7 @@ namespace Si_EloMatchmaking
         {
             _prevRoundPlayers = ConnectedCount();   // tier table reference for the next pick (Tiers.cs)
             ClearReserve();
+            _askedTeam.Clear();
             var r = _round;
             _round = null;
             if (r == null) return;

@@ -31,6 +31,9 @@ namespace Si_EloMatchmaking
         public string Name = "";
         public Team AppliedTeam = null!;
         public string AppliedFaction = "";
+        /// <summary>0.7.5: the team the player asked for in the team menu during the countdown when the head-count rule placed
+        /// them elsewhere (null = none). The pick treats that seat as their own as well (no swap or volunteer penalty).</summary>
+        public Team? AskedTeam;
         public double Rating;
         public int Games;
         /// <summary>Rating uncertainty (Elo points); large for new commanders.</summary>
@@ -95,6 +98,7 @@ namespace Si_EloMatchmaking
         static Kind? Eligibility(Seat seat, Candidate c, EloConfig cfg)
         {
             if (ReferenceEquals(c.AppliedTeam, seat.Team)) return Kind.Own;   // same Team instance (avoids Unity's fake-null ==)
+            if (c.AskedTeam is object && ReferenceEquals(c.AskedTeam, seat.Team)) return Kind.Own;   // 0.7.5: the team they asked for before the head counts placed them elsewhere
             if (cfg.AllowHumanFactionSwap && GameApi.IsHumanFaction(seat.Faction) && GameApi.IsHumanFaction(c.AppliedFaction)
                 && (c.FlexFactions == null || Accepts(c, seat.Faction))) return Kind.Swap;   // an explicit flex set also limits the swap
             if (cfg.AllowVolunteers && Accepts(c, seat.Faction)) return Kind.Volunteer;
