@@ -101,7 +101,7 @@ Si_BasicTeamBalance's own MelonPreferences values (one config for the counts), a
   `BalanceEloMinPlayersPerTeam` (4) players, a joiner without a team whose pick would push the gap
   in mean player Elo above `BalanceEloGapMax` (60) is placed on the count-eligible team that closes
   the gap most, with a one-line reason. Players who already have a team are never redirected for
-  Elo, and nobody is moved during a round. After the window only the head-count rule applies.
+  Elo, and nobody is moved against their choice during a round. After the window only the head-count rule applies.
 - **Head counts after the join.** A join may not leave the target team more than the allowed
   difference ahead of the smallest team, checked after the join (one player stricter than
   Si_BasicTeamBalance, which checks before). Allowed difference = `ceil(players / divisor + addend)`.
@@ -115,6 +115,30 @@ Si_BasicTeamBalance's own MelonPreferences values (one config for the counts), a
   approved as a **swap**: counts cannot free a spot for either alone, so both are cleared together
   (Elo check on the combined result) and moved; if one of them leaves before moving, the other falls
   back to the normal queue. The list is cleared at round start and end.
+- **A free commander seat beats the head counts (0.7.5).** A commander is one person; the seat matters more than a +1
+  imbalance. Three rules:
+  - *The pick always moves.* A commander the round-start pick (or a pin, or `!elo force`) seats on another team is moved
+    with a direct server-side move; the head-count rule is never consulted (it only guards the REQUEST_JOIN_TEAM packet).
+  - *Countdown: the team you asked for counts.* When the head-count rule redirects a fresh joiner during the countdown
+    (or denies a switch), the team they asked for is remembered. A commander applicant then counts as an applicant of
+    that team as well (own seat, no swap or volunteer penalty), so the pick can seat them where they wanted to command
+    (`PickUsesAskedTeam`, default true). The memory is cleared at round start and end. Log: `Seated: ... [moved, asked for it]`.
+  - *Mid-round: a free seat lets you through.* During a running round a team switch (or a fresh join) the counts refuse
+    goes through when the target team has no commander (an AI-run team counts as free, as for the game's own Commander
+    button), nobody else holds a claim on that seat and the player may command (AdminMod's commander request is not
+    blocked, i.e. no Si_CommManagement `!cmdrban`). The join packet carries no intent, so the player gets a **claim**:
+    green notice "Sol has no commander: you are let through for the commander seat. Take it now (Commander in the role
+    menu) within 30 s, otherwise you are moved back to Cent". Commander within `BalanceCommanderSeatGraceSeconds` (30)
+    = done; otherwise, or when someone else takes the seat first, the player is moved back to the team they came from (a
+    fresh joiner: where the counts place them; `BalanceCommanderSeatMoveBack=false` only logs). One claim per seat at a
+    time. **`!reserve <team> commander`** (also `cmdr`, `com`, `seat`, either order; Si_ModUI row "Take a free
+    commander seat") states the intent: the player is moved and seated at once, no claim. `BalanceCommanderSeatException=false`
+    switches the mid-round exception and the command off.
+
+  Unseated applicants are told after the pick when a seat stayed with the AI ("No commander seat for you this round, but
+  Sol has no commander: type !reserve sol commander ..."), `!flex` during a round says that flex counts for the next
+  pick and names the free seats it would accept, and `!flex` during the countdown from a player who has not applied no
+  longer announces a volunteer (flex widens an application, it is not one).
 
 `!elo balance` shows the state (mean player Elo per team, allowed difference, whether Elo placement
 is active); `!elo balance on|off` (admin) is the master switch. `BalanceTakeOverJoinHandling=false`
@@ -135,6 +159,17 @@ logged once per round ("<team> is out of this round (<rule>)"). A fresh joiner p
 redirect, a switcher is told, `!reserve` refuses it, `!elo balance` lists the out teams.
 0.7.4: the auto-reservation of 0.7.2 is booked only when the player keeps pressing (`BalanceAutoReservePresses` 3 within
 `BalanceAutoReserveWindowSeconds` 15); a single denied press shows "Press 2 more times or type !reserve cent ...".
+0.7.5: a free commander seat beats the head counts (see Team balance). Public-server logs 2026-11-05/06: at 19:00 three
+Alien applicants (Zef had asked Centauri and was redirected to Alien by the counts) left Sol and Centauri to the AI, then
+Zef (`!reserve Sol`, `!commander sol`) and Sir Bobbington (`!flex`, team menu) could not reach the empty Sol seat
+("Sir Bobbington -> Sol denied (team imbalance)"); at 05:37 peter asked Alien, was redirected to Sol, applied there and
+was swapped to Centauri while Alien stayed AI; Cogs then typed `!flex` and was denied Alien. New: the countdown remembers
+the team asked for (`PickUsesAskedTeam`), mid-round a count-denied join to a team without commander is let through with a
+claim (`BalanceCommanderSeatException`, `BalanceCommanderSeatGraceSeconds` 30, `BalanceCommanderSeatMoveBack`),
+`!reserve <team> commander` takes such a seat at once, unseated applicants are pointed at free seats. Log lines:
+"-> Sol allowed over the head counts (...): commander seat free, claim 30s (from Alien).", "took the free Sol commander
+seat after 6s (head-count exception).", "seat claim of X on Sol ran out after 30s (...); moved back to Alien.",
+"took the free Sol commander seat via !reserve (moved from Alien over the head counts: ...).", "Unseated applicants: ...".
 
 ```csharp
 namespace Si_EloMatchmaking { public static class AllianceHook { public static Func<Team, int>? GroupOf; } }
@@ -246,6 +281,7 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo status` | all | switches, next tier, applicant pool and projected matchup during the countdown |
 | `!elo balance` | all | team balance state: mean player Elo per team (allied teams as one bloc, 0.7.0), allowed head-count difference, Elo placement active? |
 | `!reserve <sol|cent|alien>` / `!reserve off` / `!reserve` | all | switch team at once when counts and Elo allow it, else queued and moved the moment a spot opens |
+| `!reserve <sol|cent|alien> commander` | all | during a round: move to that team and take its commander seat at once when it has no commander, regardless of the head counts (0.7.5; not for commander-banned players) |
 | `!elo on` / `off` (also `!elo matchmaking on\|off`) | admin (Commander power) | master switch; off = vanilla lottery, ratings still tracked |
 | `!elo reload` | admin | reload ratings.json |
 | `!elo reset confirm` | admin | new season: back up and wipe all ratings (for the 1.0 launch) |
@@ -308,7 +344,10 @@ journal truncated. Load replays the journal (verified identical in a harness).
 - The join takeover is harness-tested for the rule and reference-checked for the API; a server
   start on Release 1.0.4 (2026-10-22) showed the prefix removal and no errors, but the live packet
   path (read, clear request, placement) has not been exercised with a joining player yet.
-- Mid-round commander takeovers are left to the game (whoever presses Commander gets the empty seat).
+- Mid-round commander takeovers on the own team are left to the game (whoever presses Commander gets the empty seat).
+  Taking an empty seat on another team goes through the 0.7.5 seat exception (claim) or `!reserve <team> commander`.
+  Not verified in game yet: that the client shows the Commander option in the role menu right after a switch the mod
+  let through (it is the same `SendPlayerSelectTeam` the vanilla join sends, so it should).
 - 0.5.0 (2026-10-22, tiers / rotation / pass / vote) is verified in the scenario harness only; the
   pick itself (seating, moves, CommManagement handover) is unchanged from 0.3.1.
 - Not yet through a full live round. First live start 2026-10-20 on 1.0.2: reflection targets

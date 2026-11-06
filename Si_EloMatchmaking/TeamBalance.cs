@@ -19,7 +19,8 @@
            BalanceEloWindowSeconds of a round, and only when every team already has
            BalanceEloMinPlayersPerTeam players: when their pick would push the gap in mean player Elo
            above BalanceEloGapMax and another count-eligible team closes it, they go there instead.
-           Players who have a team are never redirected for Elo, nobody is moved mid-round.
+           Players who have a team are never redirected for Elo, nobody is moved mid-round against their choice
+           (0.7.5: except a seat claim that runs out, see "seat").
    ask     every BalanceAskIntervalSeconds during a round: when a team is short by two or more or
            weaker by more than the Elo gap, chat asks for volunteers (team menu or !reserve).
    reserve !reserve <team> queues for a spot on that team; !reserve off leaves, !reserve shows the
@@ -32,6 +33,16 @@
            players, bloc Elo = player-weighted mean, a join to T is allowed when (bloc(T) + 1) - min(other
            blocs) <= maxDiff (2-/3-team formula by number of blocs), a count redirect goes to a team of the
            smallest bloc (ties: smallest team). Hook null or all ids distinct = exactly the per-team rules.
+   seat    (0.7.5) a free commander seat beats the head counts. During a running round a join the counts refuse is let
+           through when the target team has no commander, nobody else holds a claim on that seat and the player may
+           command (AdminMod's commander request is not blocked, i.e. no Si_CommManagement ban): BalanceRule.SeatException.
+           The join packet carries no intent, so the player holds a claim: commander within
+           BalanceCommanderSeatGraceSeconds = done, otherwise (or when someone else takes the seat) moved back to the team
+           they came from (BalanceRule.StepClaim; BalanceCommanderSeatMoveBack=false only logs). One claim per seat at a time.
+           "!reserve <team> commander" states the intent: moved and seated at once, no claim.
+   asked   (0.7.5) during the countdown a fresh joiner the counts redirect (or a switcher they deny) keeps the team they
+           asked for in _askedTeam; a commander applicant counts for that seat too (Candidate.AskedTeam, PickUsesAskedTeam),
+           so the pick can seat them where they wanted to command. Cleared at round start (after the pick) and round end.
 */
 using HarmonyLib;
 using MelonLoader;
@@ -271,6 +282,30 @@ namespace Si_EloMatchmaking
             if (after > eloGapMax && after > before + 1e-9) { why = $"it would widen the Elo gap to {after:0}"; return false; }
             return true;
         }
+
+        // ---- commander seat (0.7.5) ------------------------------------------------
+        /// <summary>
+        /// May a join the head counts refuse go through for the target's commander seat? Only during a running round (in the
+        /// countdown every seat is still empty; the asked-team memory serves the pick there), only when the target team has no
+        /// commander (an AI-run team counts as free, as for the game's own commander request), nobody else holds a claim on
+        /// that seat and the player may command (no commander ban).
+        /// </summary>
+        public static bool SeatException(bool enabled, bool roundRunning, bool seatFree, bool claimedByOther, bool mayCommand)
+            => enabled && roundRunning && seatFree && !claimedByOther && mayCommand;
+
+        public enum ClaimStep { Wait, Taken, Expired, Gone }
+
+        /// <summary>
+        /// One poll of a seat claim. Gone: the player left the server or the claimed team on their own (nothing to undo);
+        /// Taken: they command the claimed team; Expired: the grace ran out or someone else took the seat; else Wait.
+        /// </summary>
+        public static ClaimStep StepClaim(bool online, bool onClaimTeam, bool isCommander, bool seatTakenByOther, double elapsed, double grace)
+        {
+            if (!online || !onClaimTeam) return ClaimStep.Gone;
+            if (isCommander) return ClaimStep.Taken;
+            if (seatTakenByOther || elapsed >= grace) return ClaimStep.Expired;
+            return ClaimStep.Wait;
+        }
     }
 
     public partial class EloMod
@@ -294,6 +329,11 @@ namespace Si_EloMatchmaking
         const string Red = "<color=#FF2A2A>", Green = "<color=#2EDB4F>", End = "</color>";
         /// <summary>Teams already logged as out of this round (cleared with the reserve list at round start/end).</summary>
         static readonly HashSet<string> _outLogged = new HashSet<string>();
+        /// <summary>0.7.5: countdown wishes the head counts overruled (Steam ID -> faction asked for); read by the pick (CollectPool).</summary>
+        static readonly Dictionary<string, string> _askedTeam = new Dictionary<string, string>();
+        /// <summary>0.7.5: a player let through the head counts for a free commander seat; must take it within the grace.</summary>
+        class SeatClaim { public string Steam = ""; public string Name = ""; public string Faction = ""; public string From = ""; public float Since; }
+        static readonly List<SeatClaim> _claims = new List<SeatClaim>();
 
         // ---- set-up ---------------------------------------------------------
         static void InitBalance()
@@ -553,10 +593,25 @@ namespace Si_EloMatchmaking
                 return true;
             }
             var verdict = BalanceRule.Decide(states, tIdx, isSwitch, rating, maxDiff, eloActive, Cfg.BalanceEloGapMax, Cfg.BalanceEloMinPlayersPerTeam, out int redirect, out string reason);
+            string seatWhy = "";
+            if (verdict != BalanceRule.Verdict.Allow && reason == "team imbalance")
+            {
+                // 0.7.5: a free commander seat beats the head counts (mid-round; the player gets a claim on the seat)
+                if (SeatOpenFor(strat, target, player, out seatWhy))
+                {
+                    ClaimSeat(player, target, isSwitch ? GameApi.Faction(player.Team) : "", states);
+                    Place(player, target);
+                    return true;
+                }
+            }
+            // 0.7.5: during the countdown remember what they asked for (count or Elo redirect, denied switch), so the pick can
+            // still seat a commander applicant there
+            if (verdict != BalanceRule.Verdict.Allow && InCountdown(strat)) _askedTeam[GameApi.SteamId(player)] = GameApi.Faction(target);
 
             switch (verdict)
             {
                 case BalanceRule.Verdict.Allow:
+                    _askedTeam.Remove(GameApi.SteamId(player));   // got the team they asked for
                     Place(player, target);
                     return true;
                 case BalanceRule.Verdict.Deny:
@@ -583,7 +638,8 @@ namespace Si_EloMatchmaking
                                     : Cfg.BalanceAutoReserveOnDeny && _round != null
                                         ? $"Press {more} more time{(more == 1 ? "" : "s")} or type !reserve {GameApi.Short(tf).ToLowerInvariant()} to reserve a spot and be moved automatically when it opens."
                                         : $"{Red}Try again later.{End}")
-                                + (free.Length > 0 ? $" Free right now: {free}." : "");
+                                + (free.Length > 0 ? $" Free right now: {free}." : "")
+                                + (seatWhy.Length > 0 && SeatFreeNow(strat, target) ? $" ({GameApi.Short(tf)} commander seat: {seatWhy}.)" : "");
                             GameApi.Say(player, msg);
                         }
                         SendClearRequest(steam64, channel);
@@ -609,6 +665,154 @@ namespace Si_EloMatchmaking
         {
             player.Team = team;
             NetworkLayer.SendPlayerSelectTeam(player, team);
+        }
+
+        // ---- commander seat over the head counts (0.7.5) ---------------------------
+        static bool InCountdown(MP_Strategy strat)
+        {
+            try { return strat.MissionState == GameModeExt.EMissionState.INIT && !strat.GameBegun; } catch { return false; }
+        }
+
+        static bool RoundRunning(MP_Strategy strat)
+        {
+            try { return _round != null && strat.GameBegun && !GameMode.CurrentGameMode.GameOver; } catch { return false; }
+        }
+
+        /// <summary>The team the applicant asked for during the countdown (head counts overruled it), when it is a seat of this pick other than their current team.</summary>
+        static Team? AskedSeatTeam(string steam, Team current, List<Seat> seats)
+        {
+            if (!Cfg.PickUsesAskedTeam || !_askedTeam.TryGetValue(steam, out string f)) return null;
+            var seat = seats.FirstOrDefault(s => s.Faction == f && !ReferenceEquals(s.Team, current));
+            return seat?.Team;
+        }
+
+        /// <summary>No human commander on the team right now (an AI-run team counts as free, like for the game's own request).</summary>
+        static bool SeatFreeNow(MP_Strategy strat, Team team) => GameApi.CommanderOf(strat, team) == null;
+
+        /// <summary>
+        /// Would the game let this player command? Asks AdminMod's commander-request event, i.e. Si_CommManagement's ban list
+        /// and any other mod on that event. Mid-round only: during the countdown Si_CommManagement would book it as an application.
+        /// </summary>
+        static bool MayCommand(Player player, out string why)
+        {
+            why = "";
+            try
+            {
+                var args = Event_Roles.FireOnRequestCommanderEvent(player);
+                if (args != null && args.Block) { why = "you may not command on this server (commander ban)"; return false; }
+            }
+            catch (Exception ex) { MelonLogger.Warning("[Elo] MayCommand: " + ex.Message); }
+            return true;
+        }
+
+        /// <summary>Is the commander seat of `team` open to this player over the head counts (BalanceRule.SeatException)? `why` says why not.</summary>
+        static bool SeatOpenFor(MP_Strategy strat, Team team, Player player, out string why)
+        {
+            why = "";
+            string f = GameApi.Faction(team), steam = GameApi.SteamId(player);
+            bool running = RoundRunning(strat), free = SeatFreeNow(strat, team), other = _claims.Any(c => c.Faction == f && c.Steam != steam);
+            if (!Cfg.BalanceCommanderSeatException) why = "the commander-seat exception is off";
+            else if (!running) why = "no round running";
+            else if (!free) why = $"{GameApi.Short(f)} has a commander";
+            else if (other) why = $"someone else is taking the {GameApi.Short(f)} commander seat right now";
+            bool may = why.Length == 0 && MayCommand(player, out why);   // only ask the event when everything else holds
+            return BalanceRule.SeatException(Cfg.BalanceCommanderSeatException, running, free, other, may);
+        }
+
+        static int SeatGrace => Math.Max(5, Cfg.BalanceCommanderSeatGraceSeconds);
+
+        /// <summary>The player was let through the head counts for the free seat of `team` (team menu): start the claim and tell them.</summary>
+        static void ClaimSeat(Player player, Team team, string from, List<BalanceRule.TeamState> states)
+        {
+            string steam = GameApi.SteamId(player), f = GameApi.Faction(team), name = player.PlayerName ?? steam;
+            _claims.RemoveAll(c => c.Steam == steam);
+            _claims.Add(new SeatClaim { Steam = steam, Name = name, Faction = f, From = from, Since = Time.time });
+            var res = _reserve.FirstOrDefault(r => r.Steam == steam);
+            if (res != null) Drop(res, moved: false);
+            MelonLogger.Msg($"[Elo] Balance: {name} -> {f} allowed over the head counts ({Means(states)}): commander seat free, claim {SeatGrace}s" + (from.Length > 0 ? $" (from {from})." : " (fresh join)."));
+            GameApi.Say(player, $"{Green}{GameApi.Short(f)} has no commander: you are let through for the commander seat.{End} Take it now (Commander in the role menu) within {SeatGrace} s"
+                + (Cfg.BalanceCommanderSeatMoveBack ? ", otherwise you are moved back" + (from.Length > 0 ? $" to {GameApi.Short(from)}" : "") + " (team balance)." : "."));
+        }
+
+        /// <summary>Every 2 s: a claim is done when the player commands the team, dropped when they left, and runs out after the grace or when someone else took the seat.</summary>
+        static void ProcessClaims(MP_Strategy strat)
+        {
+            if (_claims.Count == 0) return;
+            var online = GameApi.ConnectedPlayers().ToDictionary(GameApi.SteamId, p => p);
+            var teams = GameApi.ActiveTeams(strat);
+            foreach (var c in _claims.ToList())
+            {
+                online.TryGetValue(c.Steam, out var player);
+                var team = teams.FirstOrDefault(t => GameApi.Faction(t) == c.Faction);
+                var cmd = team != null ? GameApi.CommanderOf(strat, team) : null;
+                bool isCmd = player != null && cmd != null && ReferenceEquals(cmd, player);
+                float age = Time.time - c.Since;
+                var step = BalanceRule.StepClaim(player != null, player != null && team != null && ReferenceEquals(player.Team, team), isCmd, cmd != null && !isCmd, age, SeatGrace);
+                if (step == BalanceRule.ClaimStep.Wait) continue;
+                _claims.Remove(c);
+                if (step == BalanceRule.ClaimStep.Gone) { MelonLogger.Msg($"[Elo] Balance: seat claim of {c.Name} on {c.Faction} dropped after {age:0}s ({(player == null ? "left the server" : "left the team")})."); continue; }
+                if (step == BalanceRule.ClaimStep.Taken) { MelonLogger.Msg($"[Elo] Balance: {c.Name} took the free {c.Faction} commander seat after {age:0}s (head-count exception)."); continue; }
+                string why = cmd != null ? $"{cmd.PlayerName} took the {GameApi.Short(c.Faction)} commander seat" : $"you did not take the {GameApi.Short(c.Faction)} commander seat within {SeatGrace} s";
+                if (!Cfg.BalanceCommanderSeatMoveBack || player == null)
+                {
+                    MelonLogger.Msg($"[Elo] Balance: seat claim of {c.Name} on {c.Faction} ran out ({why}); stays (BalanceCommanderSeatMoveBack off).");
+                    continue;
+                }
+                // back where they came from; a fresh joiner (or a team gone out) goes where the head counts place them
+                Team? back = c.From.Length > 0 ? teams.FirstOrDefault(t => GameApi.Faction(t) == c.From) : null;
+                if (back != null && TeamOut(strat, back, out _)) back = null;
+                if (back == null)
+                {
+                    var states = TeamStates(strat, player, out var live);
+                    if (live.Count > 0) back = live[BalanceRule.BestFreshTeam(states, MaxDiffNow(states))];
+                }
+                if (back == null || ReferenceEquals(back, player.Team))
+                {
+                    MelonLogger.Msg($"[Elo] Balance: seat claim of {c.Name} on {c.Faction} ran out ({why}); no other team to move them to.");
+                    continue;
+                }
+                if (!GameApi.MovePlayer(player, back)) continue;
+                GameApi.RespawnIfUnitless(player);
+                MelonLogger.Msg($"[Elo] Balance: seat claim of {c.Name} on {c.Faction} ran out after {age:0}s ({why}); moved back to {GameApi.Faction(back)}.");
+                GameApi.Say(player, $"{Red}{char.ToUpperInvariant(why[0])}{why.Substring(1)}: moved back to {GameApi.Short(GameApi.Faction(back))} (team balance).{End}");
+            }
+        }
+
+        /// <summary>
+        /// "!reserve &lt;team&gt; commander": take that team's free commander seat now, over the head counts (the stated intent;
+        /// no claim). Same move + seat path as the round-start pick and !elo force.
+        /// </summary>
+        static void TakeSeat(Player caller, string arg)
+        {
+            var strat = GameApi.Strat;
+            string? faction = ParseFaction(arg);
+            if (faction == null || strat == null) { GameApi.Say(caller, "Usage: !reserve sol|cent|alien commander - take that team's commander seat now when it has no commander (the head-count limit does not apply)."); return; }
+            var team = GameApi.ActiveTeams(strat).FirstOrDefault(t => GameApi.Faction(t) == faction);
+            if (team == null) { GameApi.Say(caller, $"{faction} is not in this match."); return; }
+            string s = GameApi.Short(faction), steam = GameApi.SteamId(caller), name = caller.PlayerName ?? steam;
+            if (InCountdown(strat)) { GameApi.Say(caller, $"The round has not started yet: pick {s} in the team menu and press Commander (or !commander). If the head counts place you elsewhere, the pick at the start still counts you for {s}."); return; }
+            if (TeamOut(strat, team, out string outWhy)) { GameApi.Say(caller, $"{s} is out of this round ({outWhy})."); return; }
+            if (ReferenceEquals(GameApi.CommanderOf(strat, team), caller)) { GameApi.Say(caller, $"You already command {s}."); return; }
+            var own = caller.Team;
+            if (own != null && !ReferenceEquals(own, team) && ReferenceEquals(GameApi.CommanderOf(strat, own), caller)) { GameApi.Say(caller, $"You command {GameApi.Short(GameApi.Faction(own))}: leave that seat first (Infantry in the role menu), then try again."); return; }
+            if (!SeatOpenFor(strat, team, caller, out string why)) { GameApi.Say(caller, $"{Red}The {s} commander seat is not open to you{End}: {why}." + (SeatFreeNow(strat, team) ? "" : $" !reserve {s.ToLowerInvariant()} queues a normal spot.")); return; }
+            var states = TeamStates(strat, caller, out _);
+            string from = GameApi.Faction(own);
+            var res = _reserve.FirstOrDefault(r => r.Steam == steam);
+            if (res != null) Drop(res, moved: false);
+            _claims.RemoveAll(c => c.Steam == steam);
+            bool moved = !ReferenceEquals(own, team);
+            if (moved && !GameApi.MovePlayer(caller, team)) { GameApi.Say(caller, $"Could not move you to {s}."); return; }
+            if (GameApi.SeatCommander(strat, team, caller))
+            {
+                MelonLogger.Msg($"[Elo] Balance: {name} took the free {faction} commander seat via !reserve" + (moved ? $" (moved from {(from.Length > 0 ? from : "no team")} over the head counts: {Means(states)})." : "."));
+                GameApi.SayAll($"{GameApi.Colored(team, name)} takes the free {s} commander seat" + (moved && from.Length > 0 ? $" (from {GameApi.Short(from)})." : "."));
+                return;
+            }
+            // seating failed (logged by SeatCommander): leave them on the team with a claim, so they can press Commander themselves
+            GameApi.RespawnIfUnitless(caller);
+            if (moved) ClaimSeat(caller, team, from, states);
+            else GameApi.Say(caller, "Seating failed; press Commander in the role menu.");
         }
 
         /// <summary>Teams (other than the player's own and the denied one) the head counts would let the player join now, coloured, comma separated.</summary>
@@ -658,6 +862,7 @@ namespace Si_EloMatchmaking
             _balancePoll = 2f;
             var strat = GameApi.Strat;
             if (strat == null || _round == null) return;
+            ProcessClaims(strat);
             ProcessReserve(strat);
             AskVolunteers(strat);
         }
@@ -665,6 +870,7 @@ namespace Si_EloMatchmaking
         static void ClearReserve()
         {
             _reserve.Clear();
+            _claims.Clear();
             _outLogged.Clear();
             _denyPresses.Clear();
             _denyChatAt.Clear();
@@ -765,7 +971,10 @@ namespace Si_EloMatchmaking
         {
             if (caller == null) { GameApi.Say(null, "!reserve is a player command."); return; }
             var parts = (args ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            string arg = parts.Length > 1 ? parts[1].ToLowerInvariant() : "";
+            var toks = parts.Skip(1).Select(t => t.ToLowerInvariant()).ToList();
+            // 0.7.5: "!reserve <team> commander" (either order) = take that team's free commander seat now
+            if (toks.RemoveAll(t => t == "commander" || t == "cmdr" || t == "com" || t == "comm" || t == "seat") > 0) { TakeSeat(caller, toks.Count > 0 ? toks[0] : ""); return; }
+            string arg = toks.Count > 0 ? toks[0] : "";
             string steam = GameApi.SteamId(caller);
             var mine = _reserve.FirstOrDefault(r => r.Steam == steam);
             if (arg == "off" || arg == "cancel" || arg == "none")
@@ -778,7 +987,7 @@ namespace Si_EloMatchmaking
             if (arg.Length == 0)
             {
                 string list = _reserve.Count == 0 ? "nobody is waiting" : string.Join(", ", _reserve.Select((r, i) => $"{i + 1}. {r.Name} -> {GameApi.Short(r.Faction)}"));
-                GameApi.Say(caller, (mine == null ? "No reservation. " : $"You wait for {GameApi.Short(mine.Faction)}. ") + $"Queue: {list}. Usage: !reserve sol|cent|alien, !reserve off. You are moved as soon as a spot is free and the Elo balance allows it.");
+                GameApi.Say(caller, (mine == null ? "No reservation. " : $"You wait for {GameApi.Short(mine.Faction)}. ") + $"Queue: {list}. Usage: !reserve sol|cent|alien, !reserve off, !reserve <team> commander (take a free commander seat now). You are moved as soon as a spot is free and the Elo balance allows it.");
                 return;
             }
             if (!Cfg.BalanceEnabled) { GameApi.Say(caller, "Team balance is off on this server."); return; }
@@ -802,7 +1011,8 @@ namespace Si_EloMatchmaking
                 return;
             }
             MelonLogger.Msg($"[Elo] Reserve: {caller.PlayerName} queued for {faction} (position {pos}): {why}.");
-            GameApi.Say(caller, $"Reserved a spot on {GameApi.Short(faction)} (position {pos}); waiting: {why}. You move the moment it is possible. !reserve off to cancel.");
+            GameApi.Say(caller, $"Reserved a spot on {GameApi.Short(faction)} (position {pos}); waiting: {why}. You move the moment it is possible. !reserve off to cancel."
+                + (Cfg.BalanceCommanderSeatException && RoundRunning(strat) && SeatFreeNow(strat, team) ? $" {GameApi.Short(faction)} has no commander: !reserve {GameApi.Short(faction).ToLowerInvariant()} commander takes that seat at once." : ""));
         }
 
         static void HandleBalance(Player? caller, string rest)

@@ -11,6 +11,7 @@
    !elo status               current applicant pool, next tier and the matchup it would produce
    !elo balance [on|off]     team balance status (TeamBalance.cs); on/off is admin
    !reserve <team> | off     switch team at once when counts + Elo allow it, else queued until a spot opens (TeamBalance.cs)
+   !reserve <team> commander take that team's free commander seat now, over the head counts (0.7.5, TeamBalance.cs)
    !elo help
 
    admin (Power.Commander):
@@ -116,8 +117,28 @@ namespace Si_EloMatchmaking
                 case "off": GameApi.Say(caller, "Flex OFF: you are only seated on the faction you applied for (the Sol/Centauri swap still applies when the server allows it)."); break;
                 default: GameApi.Say(caller, $"Flex {label}: besides your own faction you may be seated on {label.Replace("+", " or ")} only; you are not moved anywhere else."); break;
             }
-            if (label != "off" && _preRoundActive)
-                GameApi.SayAll($"{GameApi.Colored(caller.Team, caller.PlayerName)} volunteers for " + (label == "any" ? "any commander seat." : $"a {label.Replace("+", "/")} commander seat."));
+            if (label == "off") return;
+            var strat = GameApi.Strat;
+            if (_preRoundActive && strat != null)
+            {
+                // 0.7.5: flex widens an APPLICATION; a player who has not applied is not in the pick and was announced in vain
+                string steam = GameApi.SteamId(caller);
+                if (CollectPool(strat, BuildSeats(strat), consume: false).Any(c => c.Steam == steam))
+                    GameApi.SayAll($"{GameApi.Colored(caller.Team, caller.PlayerName)} volunteers for " + (label == "any" ? "any commander seat." : $"a {label.Replace("+", "/")} commander seat."));
+                else
+                    GameApi.Say(caller, "Flex only widens a commander application: press Commander in the team menu (or type !commander) to apply, then the pick may seat you on another faction.");
+                return;
+            }
+            if (strat != null && RoundRunning(strat))
+            {
+                // 0.7.5: flex is read by the pick at round start only; mid-round point at the free seats it would accept
+                var accepted = Db.IsFlex(GameApi.SteamId(caller)) ? RatingDb.AllFactions.ToList() : (Db.FlexFactions(GameApi.SteamId(caller)) ?? new List<string>());
+                var free = GameApi.ActiveTeams(strat)
+                    .Where(t => !ReferenceEquals(t, caller.Team) && accepted.Contains(GameApi.Faction(t)) && SeatFreeNow(strat, t) && !TeamOut(strat, t, out _))
+                    .Select(t => GameApi.Short(GameApi.Faction(t))).ToList();
+                GameApi.Say(caller, "Flex counts for the commander pick at the next round start."
+                    + (free.Count > 0 && Cfg.BalanceCommanderSeatException ? $" No commander right now on {string.Join(", ", free)}: type !reserve {free[0].ToLowerInvariant()} commander to take that seat at once." : ""));
+            }
         }
 
         static void OnEloCommand(Player? caller, string args)

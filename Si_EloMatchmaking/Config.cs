@@ -108,6 +108,20 @@ namespace Si_EloMatchmaking
         public int BalanceAutoReserveWindowSeconds = 15;
         /// <summary>A team with no Headquarters/Nest standing or under construction counts as out of the round (excluded from head counts, the volunteer ask, redirects and reservations) even when the game has not flagged it as lost yet.</summary>
         public bool BalanceTeamOutWithoutRoot = true;
+        /// <summary>0.7.5: a free commander seat beats the head counts. During a running round a team switch (or a fresh join) the
+        /// head-count rule would refuse is let through when the target team has no commander and the player may command there
+        /// (no commander ban, i.e. the AdminMod commander request is not blocked); the player then holds a claim on that seat
+        /// (one claim per seat at a time). !reserve &lt;team&gt; commander takes such a seat at once. false = the counts always apply.</summary>
+        public bool BalanceCommanderSeatException = true;
+        /// <summary>Seconds a player let through for a free commander seat (team menu) has to take it.</summary>
+        public int BalanceCommanderSeatGraceSeconds = 30;
+        /// <summary>A claim that runs out (seat not taken, or taken by someone else) moves the player back to the team they came from
+        /// (a fresh joiner: where the head counts place them). false = only logged, the player stays.</summary>
+        public bool BalanceCommanderSeatMoveBack = true;
+        /// <summary>0.7.5: during the countdown the head-count rule places fresh joiners on another team than they asked for (and
+        /// denies switches). A commander applicant whose wish was overruled that way also counts as an applicant of the team they
+        /// asked for (no swap/volunteer penalty), so the pick can seat them there; the move ignores the head counts.</summary>
+        public bool PickUsesAskedTeam = true;
 
         // ---- countdown behaviour --------------------------------------------
         /// <summary>When a seat has no applicant but a !flex volunteer could fill it, extend the countdown once by this many seconds and ask. 0 = never.</summary>
