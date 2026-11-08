@@ -6,6 +6,9 @@
  seed can be dropped in as-is and the mod keeps extending it. Model summary:
  - Team rating = share-weighted mean of its human commanders' ratings.
  - Pairwise Elo winner vs. every other commanded team (loser-loser pairs skipped).
+ - 0.7.6: a round can have several winners (Si_Alliance locked 2v1, "Sol+Centauri"): every
+   winner is paired with every non-winner, winner-winner pairs are skipped like loser-loser
+   pairs (RatingDb.WinLossPairs is the one place that pairs teams).
  - Each commander receives K * share * (S - E) / (teams - 1).
  - Leaver rule: a commander who left (disconnect / resign / team change) within
    LateLeaveSeconds of the end of a LOST round is charged as if they had stayed.
@@ -104,7 +107,12 @@ namespace Si_EloMatchmaking
     public class RoundResult
     {
         public string gametype = "";
+        /// <summary>The reported (vanilla) winner.</summary>
         public string winner = "";
+        /// <summary>0.7.6: all winning factions when allies won together (Si_Alliance 2v1); empty = just `winner`.</summary>
+        public HashSet<string> winners = new HashSet<string>();
+        /// <summary>The winning factions: `winners` when set, else { winner }.</summary>
+        public HashSet<string> WinnerSet() => winners.Count > 0 ? winners : new HashSet<string> { winner };
         public double durationS;
         public List<TeamResult> teams = new List<TeamResult>();
     }
@@ -488,6 +496,55 @@ namespace Si_EloMatchmaking
 
         double KFor(int games) => games < _cfg.ProvisionalGames ? _cfg.KNew : _cfg.KBase;
 
+        /// <summary>
+        /// 0.7.6: the rated pairs of a round, (winner, loser) for every winner present in `teams` against every non-winner
+        /// present. Winner-winner (allies) and loser-loser pairs are not rated. Order follows `teams`. With one winner this
+        /// is exactly the pre-0.7.6 "winner vs every other team" set.
+        /// </summary>
+        public static List<(string win, string lose)> WinLossPairs(IEnumerable<string> teams, ICollection<string> winners)
+        {
+            var list = teams.ToList();
+            var res = new List<(string, string)>();
+            foreach (var w in list)
+            {
+                if (!winners.Contains(w)) continue;
+                foreach (var l in list) if (!winners.Contains(l)) res.Add((w, l));
+            }
+            return res;
+        }
+
+        /// <summary>
+        /// 0.7.6: parses Si_Alliance's AllianceApi.LastRoundWinners ("Sol+Centauri") into factions of this round. `teams` =
+        /// (faction, TeamShortName, TeamName) of the round's teams. A token matches a team by TeamShortName or TeamName
+        /// (case-insensitive), else by faction prefix (sol / cent / alien, as GameApi.Faction). Unmatched tokens are returned
+        /// in `unmatched`; duplicates are dropped.
+        /// </summary>
+        public static List<string> ParseWinners(string? raw, IEnumerable<(string faction, string shortName, string name)> teams, out List<string> unmatched)
+        {
+            var res = new List<string>();
+            unmatched = new List<string>();
+            if (string.IsNullOrWhiteSpace(raw)) return res;
+            var list = teams.ToList();
+            foreach (var part in raw!.Split('+'))
+            {
+                string tok = part.Trim();
+                if (tok.Length == 0) continue;
+                string? hit = null;
+                foreach (var t in list)
+                    if (string.Equals(t.shortName, tok, StringComparison.OrdinalIgnoreCase) || string.Equals(t.name, tok, StringComparison.OrdinalIgnoreCase)) { hit = t.faction; break; }
+                if (hit == null)
+                {
+                    string f = tok.StartsWith("Sol", StringComparison.OrdinalIgnoreCase) ? "Sol"
+                             : tok.StartsWith("Cent", StringComparison.OrdinalIgnoreCase) ? "Centauri"
+                             : tok.StartsWith("Alien", StringComparison.OrdinalIgnoreCase) ? "Alien" : "";
+                    foreach (var t in list) if (f.Length > 0 && t.faction == f) { hit = t.faction; break; }
+                }
+                if (hit == null) unmatched.Add(tok);
+                else if (!res.Contains(hit)) res.Add(hit);
+            }
+            return res;
+        }
+
         /// <summary>Win probabilities for display, Bradley-Terry over the seated ratings (3-way aware).</summary>
         public static double[] WinProbabilities(IList<double> ratings)
         {
@@ -510,12 +567,14 @@ namespace Si_EloMatchmaking
                 return changes;
             }
             string stamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
+            var winners = r.WinnerSet();
+            string winText = string.Join("+", winners);
 
             // ---- commander tenures after leaver rule / MinShare ----------
             var commanded = new Dictionary<string, List<(string steam, string name, double share, bool late)>>();
             foreach (var t in r.teams)
             {
-                bool lost = t.faction != r.winner;
+                bool lost = !winners.Contains(t.faction);
                 var entries = new List<(string, string, double, bool)>();
                 foreach (var c in t.commanders)
                 {
@@ -536,7 +595,8 @@ namespace Si_EloMatchmaking
             }
 
             int nTeams = commanded.Count;
-            if (nTeams >= 2 && commanded.ContainsKey(r.winner))
+            var cPairs = WinLossPairs(commanded.Keys, winners);
+            if (cPairs.Count > 0)
             {
                 foreach (var kv in commanded)
                     foreach (var e in kv.Value) GetOrCreateCommander(e.steam, e.name);
@@ -554,19 +614,18 @@ namespace Si_EloMatchmaking
                 void Add(string s, double d) { delta[s] = (delta.TryGetValue(s, out var x) ? x : 0) + d; }
                 void AddF(string s, double d) { deltaF[s] = (deltaF.TryGetValue(s, out var x) ? x : 0) + d; }
 
-                foreach (var kv in commanded)
+                foreach (var (win, lose) in cPairs)
                 {
-                    if (kv.Key == r.winner) continue;
-                    double adv = AdvFor(r.gametype, r.winner, kv.Key);
-                    double ea = Expected(teamRating[r.winner], teamRating[kv.Key], adv);
-                    double eaF = Expected(teamRatingF[r.winner], teamRatingF[kv.Key], adv);
-                    foreach (var e in commanded[r.winner])
+                    double adv = AdvFor(r.gametype, win, lose);
+                    double ea = Expected(teamRating[win], teamRating[lose], adv);
+                    double eaF = Expected(teamRatingF[win], teamRatingF[lose], adv);
+                    foreach (var e in commanded[win])
                     {
                         double k = KFor(Data.commanders[e.steam].games);
                         Add(e.steam, k * e.share * (1.0 - ea) / (nTeams - 1));
                         AddF(e.steam, k * e.share * (1.0 - eaF) / (nTeams - 1));
                     }
-                    foreach (var e in kv.Value)
+                    foreach (var e in commanded[lose])
                     {
                         double k = KFor(Data.commanders[e.steam].games);
                         Add(e.steam, k * e.share * (0.0 - (1.0 - ea)) / (nTeams - 1));
@@ -587,14 +646,16 @@ namespace Si_EloMatchmaking
                         var fs = c.Faction(kv.Key);
                         fs.rating += deltaF.TryGetValue(e.steam, out var df) ? df : 0;
                         fs.games++;
-                        if (kv.Key == r.winner) { c.wins++; fs.wins++; } else c.losses++;
+                        if (winners.Contains(kv.Key)) { c.wins++; fs.wins++; } else c.losses++;
                         if (e.late) c.late_leaves++;
                         changes.Add(new RatingChange { steam = e.steam, name = e.name, faction = kv.Key, before = before, after = c.rating, share = e.share, lateLeave = e.late });
                     }
                 }
-                summary = $"{nTeams} commanded teams, winner {r.winner}";
+                summary = $"{nTeams} commanded teams, winner{(winners.Count > 1 ? "s" : "")} {winText}";
             }
-            else summary = $"only {nTeams} commanded team(s) (winner commanded: {commanded.ContainsKey(r.winner)}), commanders not rated";
+            else summary = winners.Count > 1
+                ? $"{nTeams} commanded team(s), no commanded winner-loser pair (winners {winText}), commanders not rated"
+                : $"only {nTeams} commanded team(s) (winner commanded: {commanded.ContainsKey(r.winner)}), commanders not rated";
 
             // ---- players --------------------------------------------------
             var pt = new Dictionary<string, List<(string steam, string name, double share)>>();
@@ -604,18 +665,18 @@ namespace Si_EloMatchmaking
                                        .Select(p => (p.Key, p.Value.name, p.Value.seconds / r.durationS)).ToList();
                 if (members.Count > 0) pt[t.faction] = members;
             }
-            if (pt.Count >= 2 && pt.ContainsKey(r.winner))
+            var pPairs = WinLossPairs(pt.Keys, winners);
+            if (pPairs.Count > 0)
             {
                 foreach (var kv in pt) foreach (var m in kv.Value) GetOrCreatePlayer(m.steam, m.name);
                 var tr = pt.ToDictionary(kv => kv.Key, kv => kv.Value.Average(m => Data.players[m.steam].rating));
                 var delta = new Dictionary<string, double>();
                 void Add(string s, double d) { delta[s] = (delta.TryGetValue(s, out var x) ? x : 0) + d; }
-                foreach (var kv in pt)
+                foreach (var (win, lose) in pPairs)
                 {
-                    if (kv.Key == r.winner) continue;
-                    double ea = Expected(tr[r.winner], tr[kv.Key], AdvFor(r.gametype, r.winner, kv.Key));
-                    foreach (var m in pt[r.winner]) Add(m.steam, _cfg.KPlayer * m.share * (1.0 - ea) / (pt.Count - 1));
-                    foreach (var m in kv.Value) Add(m.steam, _cfg.KPlayer * m.share * (0.0 - (1.0 - ea)) / (pt.Count - 1));
+                    double ea = Expected(tr[win], tr[lose], AdvFor(r.gametype, win, lose));
+                    foreach (var m in pt[win]) Add(m.steam, _cfg.KPlayer * m.share * (1.0 - ea) / (pt.Count - 1));
+                    foreach (var m in pt[lose]) Add(m.steam, _cfg.KPlayer * m.share * (0.0 - (1.0 - ea)) / (pt.Count - 1));
                 }
                 foreach (var kv in pt)
                 {
@@ -628,7 +689,7 @@ namespace Si_EloMatchmaking
                         p.last_seen = stamp;
                         p.peak = Math.Max(p.peak, p.rating);
                         p.Faction(kv.Key).games++;
-                        if (kv.Key == r.winner) { p.wins++; p.Faction(kv.Key).wins++; } else p.losses++;
+                        if (winners.Contains(kv.Key)) { p.wins++; p.Faction(kv.Key).wins++; } else p.losses++;
                     }
                 }
             }

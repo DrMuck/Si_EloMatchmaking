@@ -170,6 +170,12 @@ claim (`BalanceCommanderSeatException`, `BalanceCommanderSeatGraceSeconds` 30, `
 "-> Sol allowed over the head counts (...): commander seat free, claim 30s (from Alien).", "took the free Sol commander
 seat after 6s (head-count exception).", "seat claim of X on Sol ran out after 30s (...); moved back to Alien.",
 "took the free Sol commander seat via !reserve (moved from Alien over the head counts: ...).", "Unseated applicants: ...".
+0.7.6: allied winners are rated as winners (Si_Alliance 0.3.0 locked 2v1, see Rating model). Also confirmed: an alliance
+formed at MissionState INIT (Si_Alliance `AllianceApi.ForceAlliance` right after the layout choice, before anyone joins)
+is honoured for every later join. `TeamStates()` (TeamBalance.cs, `var hook = AllianceHook.GroupOf;` at the top) reads
+the hook fresh on every call and every join / redirect / `!reserve` / swap / ask / `!elo balance` path calls it; Elo
+never assigns or caches `GroupOf`, and `TeamOut()` keeps every team in before `GameBegun`. `MP_Strategy.Restart()` (which
+makes Si_Alliance dissolve) runs before the layout choice, so it cannot wipe an alliance formed after it.
 
 ```csharp
 namespace Si_EloMatchmaking { public static class AllianceHook { public static Func<Team, int>? GroupOf; } }
@@ -209,6 +215,19 @@ a 1900 would widen the gap, and goes through when it closes it.
 - Team rating = tenure-share-weighted mean of its human commanders. Teams without a human commander
   (AI) are ignored. Pairwise update winner vs each loser; loser-vs-loser pairs in 3-way rounds carry
   no information and are skipped. Each commander gets `K * share * (S - E) / (teams - 1)`.
+- **Several winners (0.7.6, Si_Alliance locked 2v1).** Vanilla reports one winner; after a Si_Alliance "humans_win"
+  end (Aliens eliminated, Sol+Centauri allied) it reports the ally with more structures. At round end Elo reads
+  `Si_Alliance.AllianceApi.LastRoundWinners` by reflection (no compile-time reference; missing mod / property = ""),
+  splits it on `+` and matches each name to a team of the round by `TeamShortName` or `TeamName` (case-insensitive,
+  else the sol/cent/alien prefix). With two or more teams matched AND the reported winner among them, every winner is
+  paired with every non-winner as a win, winner-winner pairs are skipped like loser-loser pairs (`RatingDb.WinLossPairs`
+  is the one place that pairs teams, used for commander, per-faction and player Elo). Win/loss counters: every
+  winner's commanders and players get a win; the leaver rule charges only the losers. Divisor stays `teams - 1`, so in
+  a 2v1 with all three commanded each ally gets half a normal win (one pair of two) and the Aliens a full loss (two
+  pairs), e.g. all 1500, K 60: Sol +15, Centauri +15, Alien -30 (0.7.5 rated the same round Centauri +30, Sol -15,
+  Alien -15). Log line: `[ELO] allied winners: Sol+Centauri vs Alien`; `Round rated: ... winners Sol+Centauri
+  (reported Centauri)`. A value that does not include the reported winner (stale) or names fewer than two teams is
+  ignored with a log line. Commander seat streaks are seat-based and unaffected; duel Elo lives in Si_Leaderboard.
 - Small faction/mode advantage term estimated from the logs (shrunk to 0, capped at +-100).
 - Rounds shorter than 4 min are not rated.
 - Seed validation on 3647 logged rounds: the pre-round favourite won 73 % of rounds (71 % when both
@@ -348,6 +367,8 @@ journal truncated. Load replays the journal (verified identical in a harness).
   Taking an empty seat on another team goes through the 0.7.5 seat exception (claim) or `!reserve <team> commander`.
   Not verified in game yet: that the client shows the Commander option in the role menu right after a switch the mod
   let through (it is the same `SendPlayerSelectTeam` the vanilla join sends, so it should).
+- 0.7.6 allied-winner rating is harness-tested only (scratchpad: 0.7.5-identical on 20k random single-winner rounds,
+  2v1 cases); no live Si_Alliance humans_win end has been rated yet.
 - 0.5.0 (2026-10-22, tiers / rotation / pass / vote) is verified in the scenario harness only; the
   pick itself (seating, moves, CommManagement handover) is unchanged from 0.3.1.
 - Not yet through a full live round. First live start 2026-10-20 on 1.0.2: reflection targets

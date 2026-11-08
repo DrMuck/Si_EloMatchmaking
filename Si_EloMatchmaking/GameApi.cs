@@ -158,6 +158,47 @@ namespace Si_EloMatchmaking
 
         public static bool HasCommMgmt { get { LookupCommMgmt(); return _commApplicantsField != null; } }
 
+        // Si_Alliance.AllianceApi.LastRoundWinners (public static string, Si_Alliance 0.3.0+), read by reflection
+        static PropertyInfo? _allianceWinners;
+        static bool _allianceMissingLogged;
+
+        /// <summary>
+        /// 0.7.6: Si_Alliance's AllianceApi.LastRoundWinners ("Sol+Centauri" after a locked 2v1 humans_win end, "" otherwise).
+        /// "" when Si_Alliance is not loaded, older than 0.3.0, or the read fails. No compile-time reference; the type is
+        /// searched over the loaded assemblies until found (a miss costs one scan per round end).
+        /// </summary>
+        public static string AllianceLastRoundWinners()
+        {
+            try
+            {
+                if (_allianceWinners == null)
+                {
+                    foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        Type? t = null;
+                        try { t = asm.GetType("Si_Alliance.AllianceApi", false); } catch { }
+                        if (t == null) continue;
+                        _allianceWinners = t.GetProperty("LastRoundWinners", BindingFlags.Public | BindingFlags.Static);
+                        if (_allianceWinners == null || _allianceWinners.PropertyType != typeof(string))
+                        {
+                            _allianceWinners = null;
+                            if (!_allianceMissingLogged) { _allianceMissingLogged = true; MelonLogger.Msg($"[Elo] Si_Alliance.AllianceApi found ({asm.GetName().Version}) but without LastRoundWinners (Si_Alliance < 0.3.0): allied wins rate the reported winner only."); }
+                            return "";
+                        }
+                        MelonLogger.Msg($"[Elo] Si_Alliance.AllianceApi.LastRoundWinners found ({asm.GetName().Name} {asm.GetName().Version}).");
+                        break;
+                    }
+                    if (_allianceWinners == null) return "";
+                }
+                return _allianceWinners.GetValue(null) as string ?? "";
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning("[Elo] reading Si_Alliance.AllianceApi.LastRoundWinners failed: " + ex.GetBaseException().Message);
+                return "";
+            }
+        }
+
         /// <summary>Snapshot of Si_CommManagement's !commander applicants, keyed by Team.</summary>
         public static Dictionary<Team, List<Player>> CommMgmtApplicants()
         {
