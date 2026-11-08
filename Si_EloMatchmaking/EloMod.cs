@@ -28,6 +28,8 @@
    Since 0.7.0 allied teams (AllianceHook.GroupOf, set by Si_Alliance) are balanced as one bloc.
    Since 0.7.6 a round the allies won together (Si_Alliance locked 2v1, AllianceApi.LastRoundWinners) rates every
    winner as a win against every non-winner; the allies are not rated against each other.
+   Since 0.7.7 3-way rounds (3 active teams) are not rated unless rate_three_way is on (default off), 2v1 rounds
+   (Si_Alliance locked alliance) follow rate_two_vs_one (default on); the pick and the team balance are unchanged.
 
  How it hooks the game (0.9.47 and 1.0.2, Mono server)
  - Postfix on MP_Strategy.OnMissionStateChanged(STARTED) with Priority.High: runs before
@@ -55,7 +57,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.7.6";
+        public const string Version = "0.7.7";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();
@@ -90,6 +92,8 @@ namespace Si_EloMatchmaking
             public Dictionary<Team, Tenure?> open = new Dictionary<Team, Tenure?>();
             public Dictionary<Team, Dictionary<string, (string name, double seconds)>> presence = new Dictionary<Team, Dictionary<string, (string, double)>>();
             public float lastPoll;
+            /// <summary>0.7.7: Si_Alliance's AllianceApi.IsLocked at the last poll (3-way rounds only; false without Si_Alliance).</summary>
+            public bool lockedLastPoll;
         }
 
         static RoundTracker? _round;
@@ -479,6 +483,11 @@ namespace Si_EloMatchmaking
         static void PollRound(MP_Strategy strat, float dt)
         {
             if (_round == null) return;
+            if (_round.teams.Count >= 3)
+            {
+                var locked = GameApi.AllianceIsLocked();
+                if (locked != null) _round.lockedLastPoll = locked.Value;
+            }
             float now = Time.time;
             foreach (var team in _round.teams)
             {
@@ -582,6 +591,30 @@ namespace Si_EloMatchmaking
                 if (r.presence.TryGetValue(team, out var pres))
                     foreach (var kv in pres) tr.players[kv.Key] = kv.Value;
                 rr.teams.Add(tr);
+            }
+
+            // 0.7.7: 3-way / 2v1 rounds may be excluded from rating (rate_three_way, rate_two_vs_one); the pick and the team
+            // balance are not affected. 2v1 = Si_Alliance locked alliance: allies won together (LastRoundWinners), or the lock
+            // was active at the end (IsLocked now, or at the last 2 s poll when Alliance already dissolved in its own handler).
+            if (r.teams.Count >= 3)
+            {
+                bool? lockedNow = GameApi.AllianceIsLocked();
+                string how = allied.Count >= 2 ? "allies won together" : lockedNow == true ? "locked alliance at the end" : r.lockedLastPoll ? "locked alliance at the last poll" : "";
+                bool twoVsOne = how.Length > 0;
+                if (twoVsOne) MelonLogger.Msg($"[Elo] 2v1 round (Si_Alliance: {how}).");
+                rr.unrated = RatingDb.UnratedReason(r.teams.Count, twoVsOne, Cfg) ?? "";
+            }
+            if (rr.unrated.Length > 0)
+            {
+                bool is2v1 = rr.unrated == "2v1";
+                string label = is2v1 ? "2v1" : "3-way";
+                MelonLogger.Msg($"[Elo] Round not rated: {label} ({(is2v1 ? "rate_two_vs_one" : "rate_three_way")}=false)");
+                Db.ApplyRound(rr, out string why);   // no-op for an unrated round, kept on the one path
+                string cmdrs = string.Join(", ", rr.teams.Select(t => $"{GameApi.Short(t.faction)}=" + (t.commanders.Count == 0 ? "AI" : string.Join("/", t.commanders.Select(c => $"{c.name} {c.seconds / Math.Max(1, dur) * 100:0}%")))));
+                MelonLogger.Msg($"[Elo] Round result ({why}): {r.teams.Count} teams, {dur:0}s, winner {winText}{(rr.winners.Count > 1 ? $" (reported {winFaction})" : "")}, commanders {cmdrs}, players {rr.teams.Sum(t => t.players.Count)}; no rating or counter changed.");
+                if (Cfg.AnnounceRatingChanges)
+                    GameApi.SayAll($"Round not rated ({label}): {(is2v1 ? "2v1" : "3-way")} rounds do not change Elo on this server.");
+                return;
             }
 
             var changes = Db.ApplyRound(rr, out string summary);

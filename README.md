@@ -17,6 +17,9 @@ against the default branch, git branch `test` against the test branch (see Build
   that gives a better matchup. For an empty Alien seat, applicants who typed `!flex` may be used.
   When a seat has no applicant but a leftover applicant exists, the countdown is extended once
   (`AskExtendSeconds`) and chat asks for `!flex` volunteers.
+- **3-way and 2v1 rounds can be left unrated (0.7.7).** `rate_three_way` (default **false**) and
+  `rate_two_vs_one` (default true) in the config, admin `!elo rate3way on|off` / `!elo rate2v1 on|off`. The pick
+  and the team balance work in those rounds as always (see Rating model).
 - **Leaver rule.** A commander who disconnects, resigns or changes team within `LateLeaveSeconds`
   (10 min) of the end of a round their team lost is charged as if they had stayed to the end.
 - **Chat display.** Applicants with rating during the countdown, the matchup with win chances at
@@ -228,6 +231,20 @@ a 1900 would widen the gap, and goes through when it closes it.
   Alien -15). Log line: `[ELO] allied winners: Sol+Centauri vs Alien`; `Round rated: ... winners Sol+Centauri
   (reported Centauri)`. A value that does not include the reported winner (stale) or names fewer than two teams is
   ignored with a log line. Commander seat streaks are seat-based and unaffected; duel Elo lives in Si_Leaderboard.
+- **Optional rating of 3-way / 2v1 rounds (0.7.7).** A round that started with 3 active teams (Humans vs Humans vs
+  Aliens) is only rated when the config allows it: `rate_three_way` (default **false**, i.e. 3-way rounds no longer
+  change Elo; 0.7.6 rated them) for a 3-way round with a single winner, `rate_two_vs_one` (default true) for a 2v1
+  round. 2v1 = Si_Alliance locked alliance, detected at round end by any of: `AllianceApi.LastRoundWinners` names two
+  or more teams of the round (allies won together; Si_Alliance sets it before `EndRound` and keeps it until the next
+  start/restart), `AllianceApi.IsLocked` read at the end, or `IsLocked` at the last 2-s poll of the round (Si_Alliance
+  dissolves in its own `GameEvents.OnGameEnded` handler, which may run before our `MusicJukeboxHandler.OnGameEnded`
+  postfix, so a lost 2v1 (Alien wins, no allied winners) needs the poll). An unrated round changes nothing: no
+  commander / faction / player Elo, no win-loss or game counters, no leaver charge, `rounds_live` not counted (seat
+  streaks and wait bonus are pick state, not ratings, and keep working). Log: `[Elo] 2v1 round (Si_Alliance: ...)`,
+  `[Elo] Round not rated: 3-way (rate_three_way=false)` (or `2v1 (rate_two_vs_one=false)`), then `[Elo] Round result
+  (unrated: three_way): 3 teams, 1800s, winner Alien, commanders Sol=..., players n; no rating or counter changed.`;
+  chat (with `AnnounceRatingChanges`): `Round not rated (3-way): 3-way rounds do not change Elo on this server.`
+  2-team rounds (HvH, HvA) are always rated. `RatingDb.UnratedReason` is the decision, `RoundResult.unrated` the flag.
 - Small faction/mode advantage term estimated from the logs (shrunk to 0, capped at +-100).
 - Rounds shorter than 4 min are not rated.
 - Seed validation on 3647 logged rounds: the pre-round favourite won 73 % of rounds (71 % when both
@@ -308,6 +325,7 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo swap on/off`, `!elo volunteers on/off`, `!elo spread <w>`, `!elo level <w>` | admin | tune the objective |
 | `!elo tier <tier>` / `!elo tier auto` | admin | force the tier of the next pick / back to vote + player count |
 | `!elo balance on|off` | admin | team balance master switch |
+| `!elo rate3way on\|off` / `!elo rate2v1 on\|off` | admin | rate 3-way rounds (`rate_three_way`, default off) / Si_Alliance locked 2v1 rounds (`rate_two_vs_one`, default on); persisted in the config, shown in `!elo status` and the ModUI page (0.7.7) |
 | `!elo tiers 0=any,10=midhigh,20=high` | admin | the tier-by-player-count table (persisted in the config) |
 | `!elo seat <sol\|cent\|alien> <player>` | admin | pin this player as commander of that faction for the next round, ahead of the Elo pick (organised matches); `!elo seat` lists the pins |
 | `!elo unseat <faction>` / `!elo unseat all` | admin | drop a pin |
@@ -367,6 +385,10 @@ journal truncated. Load replays the journal (verified identical in a harness).
   Taking an empty seat on another team goes through the 0.7.5 seat exception (claim) or `!reserve <team> commander`.
   Not verified in game yet: that the client shows the Commander option in the role menu right after a switch the mod
   let through (it is the same `SendPlayerSelectTeam` the vanilla join sends, so it should).
+- 0.7.7 unrated 3-way / 2v1 rounds are harness-tested only (scratchpad elo076test: 52/52, 3-way unrated leaves a
+  populated db byte-identical over 5000 random rounds, 2-team rounds identical to 0.7.6 under every switch setting,
+  2v1 rated / unrated by `rate_two_vs_one`); the `IsLocked` poll and the end-of-round order against Si_Alliance are
+  not seen live yet.
 - 0.7.6 allied-winner rating is harness-tested only (scratchpad: 0.7.5-identical on 20k random single-winner rounds,
   2v1 cases); no live Si_Alliance humans_win end has been rated yet.
 - 0.5.0 (2026-10-22, tiers / rotation / pass / vote) is verified in the scenario harness only; the

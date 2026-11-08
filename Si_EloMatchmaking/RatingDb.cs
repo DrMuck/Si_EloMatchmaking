@@ -115,6 +115,8 @@ namespace Si_EloMatchmaking
         public HashSet<string> WinnerSet() => winners.Count > 0 ? winners : new HashSet<string> { winner };
         public double durationS;
         public List<TeamResult> teams = new List<TeamResult>();
+        /// <summary>0.7.7: "" = rated; "three_way" / "2v1" = excluded by the config (RatingDb.UnratedReason), ApplyRound changes nothing.</summary>
+        public string unrated = "";
     }
 
     public class RatingChange
@@ -554,13 +556,29 @@ namespace Si_EloMatchmaking
         }
 
         /// <summary>
+        /// 0.7.7: why a round is excluded from rating by the config, null = rated. activeTeams = teams that started the round;
+        /// twoVsOne = a Si_Alliance locked 2v1 round. Rounds with fewer than 3 teams are always rated (HvH, HvA).
+        /// </summary>
+        public static string? UnratedReason(int activeTeams, bool twoVsOne, EloConfig cfg)
+        {
+            if (activeTeams < 3) return null;
+            if (twoVsOne) return cfg.RateTwoVsOne ? null : "2v1";
+            return cfg.RateThreeWay ? null : "three_way";
+        }
+
+        /// <summary>
         /// Apply one finished round. Returns the commander rating changes (empty when the
-        /// round carried no commander information).
+        /// round carried no commander information). A round with `unrated` set changes nothing (0.7.7).
         /// </summary>
         public List<RatingChange> ApplyRound(RoundResult r, out string summary)
         {
             var changes = new List<RatingChange>();
             summary = "";
+            if (!string.IsNullOrEmpty(r.unrated))
+            {
+                summary = $"unrated: {r.unrated}";
+                return changes;
+            }
             if (r.durationS < _cfg.MinRoundSeconds)
             {
                 summary = $"round too short ({r.durationS:0}s), not rated";

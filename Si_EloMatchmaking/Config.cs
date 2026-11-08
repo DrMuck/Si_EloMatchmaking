@@ -26,6 +26,13 @@ namespace Si_EloMatchmaking
         public bool Enabled = true;
         /// <summary>Update ratings.json from finished rounds.</summary>
         public bool UpdateRatingsLive = true;
+        /// <summary>0.7.7: rate 3-way rounds (Humans vs Humans vs Aliens, 3 active teams) that end with a single winner. false =
+        /// such a round changes no rating or counter (commander, faction, player Elo, win/loss, leaver charge); it is logged as
+        /// "unrated: three_way". Matchmaking and team balance work in those rounds as always.</summary>
+        [JsonProperty("rate_three_way")] public bool RateThreeWay = false;
+        /// <summary>0.7.7: rate 2v1 rounds (Si_Alliance locked alliance: allies won together, or the lock was active at the end).
+        /// false = not rated, logged as "unrated: 2v1". Independent of rate_three_way.</summary>
+        [JsonProperty("rate_two_vs_one")] public bool RateTwoVsOne = true;
 
         // ---- matchmaking objective ------------------------------------------
         /// <summary>Score = LevelWeight * mean(rating) - SpreadWeight * spread - tier cost - penalties + wait bonus. SpreadWeight 1.0 = one Elo point of spread costs one point.</summary>
