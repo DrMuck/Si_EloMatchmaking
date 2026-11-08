@@ -26,6 +26,8 @@
    remembers the team a redirected applicant asked for, mid-round a switch to a team without commander is let through
    with a claim on the seat, and !reserve <team> commander takes such a seat at once.
    Since 0.7.0 allied teams (AllianceHook.GroupOf, set by Si_Alliance) are balanced as one bloc.
+   Since 0.7.6 a round the allies won together (Si_Alliance locked 2v1, AllianceApi.LastRoundWinners) rates every
+   winner as a win against every non-winner; the allies are not rated against each other.
 
  How it hooks the game (0.9.47 and 1.0.2, Mono server)
  - Postfix on MP_Strategy.OnMissionStateChanged(STARTED) with Priority.High: runs before
@@ -53,7 +55,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.7.5";
+        public const string Version = "0.7.6";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();
@@ -549,6 +551,15 @@ namespace Si_EloMatchmaking
             }
 
             var rr = new RoundResult { gametype = r.gametype, winner = winFaction, durationS = dur };
+            // 0.7.6: allies that won together (Si_Alliance locked 2v1) are all winners; vanilla only reports one of them
+            var allied = AlliedWinners(r.teams, winFaction);
+            if (allied.Count >= 2)
+            {
+                rr.winners = new HashSet<string>(allied);
+                var losers = r.teams.Select(GameApi.Faction).Where(f => !rr.winners.Contains(f)).ToList();
+                MelonLogger.Msg($"[ELO] allied winners: {string.Join("+", allied)} vs {(losers.Count > 0 ? string.Join("+", losers) : "-")}");
+            }
+            string winText = string.Join("+", rr.WinnerSet());
             var factionTeam = new Dictionary<string, Team>();
             foreach (var team in r.teams)
             {
@@ -575,7 +586,7 @@ namespace Si_EloMatchmaking
 
             var changes = Db.ApplyRound(rr, out string summary);
             Db.Save();
-            MelonLogger.Msg($"[Elo] Round rated: {summary}; {dur:0}s, winner {winFaction}, {changes.Count} commander change(s).");
+            MelonLogger.Msg($"[Elo] Round rated: {summary}; {dur:0}s, winner {winText}{(rr.winners.Count > 1 ? $" (reported {winFaction})" : "")}, {changes.Count} commander change(s).");
 
             if (Cfg.AnnounceRatingChanges && changes.Count > 0)
             {
@@ -588,6 +599,40 @@ namespace Si_EloMatchmaking
                     GameApi.SayAll(line);
                 }
             }
+        }
+
+        /// <summary>
+        /// 0.7.6: the winning factions named by Si_Alliance's AllianceApi.LastRoundWinners, matched to this round's teams
+        /// (RatingDb.ParseWinners). Empty unless at least two teams are named and the vanilla-reported winner is one of them
+        /// (anything else is a stale or foreign value and is ignored with a log line).
+        /// </summary>
+        static List<string> AlliedWinners(List<Team> teams, string reported)
+        {
+            string raw = GameApi.AllianceLastRoundWinners();
+            if (string.IsNullOrWhiteSpace(raw)) return new List<string>();
+            var info = new List<(string, string, string)>();
+            foreach (var t in teams)
+            {
+                if (t == null) continue;
+                string sn = "", n = "";
+                try { sn = t.TeamShortName ?? ""; } catch { }
+                try { n = t.TeamName ?? ""; } catch { }
+                info.Add((GameApi.Faction(t), sn, n));
+            }
+            var res = RatingDb.ParseWinners(raw, info, out var unmatched);
+            if (unmatched.Count > 0)
+                MelonLogger.Warning($"[Elo] Si_Alliance winners '{raw}': no team of this round for {string.Join(", ", unmatched)}.");
+            if (res.Count < 2)
+            {
+                MelonLogger.Msg($"[Elo] Si_Alliance winners '{raw}' name fewer than two teams of this round; rating the reported winner {reported} only.");
+                return new List<string>();
+            }
+            if (!res.Contains(reported))
+            {
+                MelonLogger.Warning($"[Elo] Si_Alliance winners '{raw}' do not include the reported winner {reported} (stale value?); ignored.");
+                return new List<string>();
+            }
+            return res;
         }
     }
 }
