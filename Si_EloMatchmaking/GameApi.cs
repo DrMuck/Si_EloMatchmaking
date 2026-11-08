@@ -167,6 +167,49 @@ namespace Si_EloMatchmaking
         /// "" when Si_Alliance is not loaded, older than 0.3.0, or the read fails. No compile-time reference; the type is
         /// searched over the loaded assemblies until found (a miss costs one scan per round end).
         /// </summary>
+        // Si_Alliance.AllianceApi.IsLocked (public static bool, Si_Alliance 0.3.0+), read by reflection (0.7.7)
+        static PropertyInfo? _allianceLocked;
+        static int _allianceLockedScanTick = int.MinValue;
+
+        /// <summary>
+        /// 0.7.7: Si_Alliance's AllianceApi.IsLocked (a locked 2v1 alliance is active). null when Si_Alliance is not loaded,
+        /// has no IsLocked, or the read fails. Polled every 2 s during 3-way rounds (EloMod.PollRound), so a missing type is
+        /// searched for again at most every 30 s. Alliance dissolves in its GameEvents.OnGameEnded handler, which may run
+        /// before or after our MusicJukeboxHandler.OnGameEnded postfix (delegate order = subscription order), so the round
+        /// end uses the last poll as well as a read at the end.
+        /// </summary>
+        public static bool? AllianceIsLocked()
+        {
+            try
+            {
+                if (_allianceLocked == null)
+                {
+                    int now = Environment.TickCount;
+                    if (_allianceLockedScanTick != int.MinValue && unchecked(now - _allianceLockedScanTick) < 30000) return null;
+                    _allianceLockedScanTick = now;
+                    foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        Type? t = null;
+                        try { t = asm.GetType("Si_Alliance.AllianceApi", false); } catch { }
+                        if (t == null) continue;
+                        var pi = t.GetProperty("IsLocked", BindingFlags.Public | BindingFlags.Static);
+                        if (pi == null || pi.PropertyType != typeof(bool)) return null;
+                        _allianceLocked = pi;
+                        MelonLogger.Msg($"[Elo] Si_Alliance.AllianceApi.IsLocked found ({asm.GetName().Name} {asm.GetName().Version}).");
+                        break;
+                    }
+                    if (_allianceLocked == null) return null;
+                }
+                return _allianceLocked.GetValue(null) is bool b ? b : (bool?)null;
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning("[Elo] reading Si_Alliance.AllianceApi.IsLocked failed: " + ex.GetBaseException().Message);
+                _allianceLocked = null;   // look again in 30 s instead of failing every poll
+                return null;
+            }
+        }
+
         public static string AllianceLastRoundWinners()
         {
             try

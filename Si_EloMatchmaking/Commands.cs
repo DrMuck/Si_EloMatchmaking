@@ -27,6 +27,8 @@
    !elo tiers 0=any,10=midhigh,20=high   tier by player count (persisted)
    !elo tierat <1|2|3> <tier>            tier of one table row (ModUI switch rows); !elo tierfrom <2|3> <players> its threshold
    !elo seat <faction> <player>   pin a commander for the next round (Pins.cs); !elo seat lists, !elo unseat drops
+   !elo rate3way on|off      rate 3-way rounds (config rate_three_way, default off; 0.7.7)
+   !elo rate2v1 on|off       rate Si_Alliance locked 2v1 rounds (config rate_two_vs_one, default on; 0.7.7)
 */
 using MelonLoader;
 using SilicaAdminMod;
@@ -153,7 +155,7 @@ namespace Si_EloMatchmaking
                     ShowOwn(caller);
                     return;
                 case "help":
-                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo pass | !elo vote <any|low|mid|midhigh|high> | !elo status | !elo balance | !reserve <team>" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>, level <w>, tier <tier|auto>, tiers <n=tier,...>, balance on/off, seat <faction> <player>, unseat <faction|all>, force" : ""));
+                    GameApi.Say(caller, "!elo | !elo top | !elo <name> | !elo flex | !elo pass | !elo vote <any|low|mid|midhigh|high> | !elo status | !elo balance | !reserve <team>" + (IsAdmin(caller) ? " | admin: on/off, reload, set <name> <rating>, swap on/off, volunteers on/off, spread <w>, level <w>, tier <tier|auto>, tiers <n=tier,...>, balance on/off, rate3way on/off, rate2v1 on/off, seat <faction> <player>, unseat <faction|all>, force" : ""));
                     return;
                 case "top":
                     ShowTop(caller);
@@ -183,7 +185,7 @@ namespace Si_EloMatchmaking
                 if (want != "on" && want != "off") { GameApi.Say(caller, $"Matchmaking is {(Cfg.Enabled ? "ON" : "OFF")}. Usage: !elo matchmaking on|off"); return; }
                 sub = want;
             }
-            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "level" || sub == "tier" || sub == "tiers" || sub == "tierat" || sub == "tierfrom" || sub == "reset" || sub == "seat" || sub == "unseat" || sub == "force")
+            if (sub == "on" || sub == "off" || sub == "reload" || sub == "set" || sub == "swap" || sub == "volunteers" || sub == "spread" || sub == "level" || sub == "tier" || sub == "tiers" || sub == "tierat" || sub == "tierfrom" || sub == "reset" || sub == "seat" || sub == "unseat" || sub == "force" || sub == "rate3way" || sub == "rate2v1")
             {
                 if (!IsAdmin(caller)) { GameApi.Say(caller, "Admin only."); return; }
                 switch (sub)
@@ -210,6 +212,10 @@ namespace Si_EloMatchmaking
                         return;
                     case "seat":
                         HandleSeat(caller, rest);
+                        return;
+                    case "rate3way":
+                    case "rate2v1":
+                        HandleRateSwitch(caller, sub == "rate3way", rest);
                         return;
                     case "force":
                         HandleForce(caller);
@@ -286,6 +292,29 @@ namespace Si_EloMatchmaking
                 GameApi.Say(caller, Describe(kv.Key, kv.Value));
         }
 
+        /// <summary>0.7.7: !elo rate3way|rate2v1 [on|off] (admin); without an argument shows the state. Persisted to the config.</summary>
+        static void HandleRateSwitch(Player? caller, bool threeWay, string rest)
+        {
+            string want = rest.Trim().ToLowerInvariant();
+            string cmd = threeWay ? "rate3way" : "rate2v1", key = threeWay ? "rate_three_way" : "rate_two_vs_one";
+            if (want != "on" && want != "off")
+            {
+                GameApi.Say(caller, RatedRoundsText() + $" Usage: !elo {cmd} on|off ({key}).");
+                return;
+            }
+            bool on = want == "on";
+            if (threeWay) Cfg.RateThreeWay = on; else Cfg.RateTwoVsOne = on;
+            ConfigStore.Save(Cfg);
+            MelonLogger.Msg($"[Elo] {key} = {(on ? "true" : "false")} (by {(caller == null ? "console" : caller.PlayerName)}).");
+            GameApi.SayAll(threeWay
+                ? (on ? "3-way rounds are rated again (commander and player Elo)." : "3-way rounds are no longer rated: they do not change Elo. Matchmaking still uses Elo.")
+                : (on ? "2v1 rounds (locked alliance) are rated." : "2v1 rounds (locked alliance) are no longer rated: they do not change Elo."));
+        }
+
+        /// <summary>"3-way rounds: not rated, 2v1 rounds: rated." (status line, ModUI info).</summary>
+        static string RatedRoundsText()
+            => $"3-way rounds: {(Cfg.RateThreeWay ? "rated" : "not rated")}, 2v1 rounds: {(Cfg.RateTwoVsOne ? "rated" : "not rated")}.";
+
         static string? ResolveSteam(string target, out string shown)
         {
             shown = target;
@@ -342,7 +371,7 @@ namespace Si_EloMatchmaking
             if (strat == null) { GameApi.Say(caller, "No strategy game mode active."); return; }
             GameApi.Say(caller, $"Matchmaking {(Cfg.Enabled ? "ON" : "OFF")}, swap {(Cfg.AllowHumanFactionSwap ? "on" : "off")}, volunteers {(Cfg.AllowVolunteers ? "on" : "off")}, spread weight {Cfg.SpreadWeight.ToString("0.##", CultureInfo.InvariantCulture)}, level weight {Cfg.LevelWeight.ToString("0.##", CultureInfo.InvariantCulture)}, CommMgmt {(GameApi.HasCommMgmt ? "linked" : "absent")}."
                 + (_pins.Count > 0 ? " Pinned: " + string.Join(", ", _pins.Select(p => $"{GameApi.Short(p.Key)}: {p.Value.Name}")) + "." : ""));
-            GameApi.Say(caller, "Next pick: " + TierSummary(TierPlayerCount()) + ".");
+            GameApi.Say(caller, "Next pick: " + TierSummary(TierPlayerCount()) + ". " + RatedRoundsText());
             bool pre;
             try { pre = strat.MissionState == GameModeExt.EMissionState.INIT && strat.TeamsVersus != GameModeExt.ETeamsVersus.NONE; } catch { pre = false; }
             if (pre)
