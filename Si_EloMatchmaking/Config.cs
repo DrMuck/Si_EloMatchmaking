@@ -33,6 +33,10 @@ namespace Si_EloMatchmaking
         /// <summary>0.7.7: rate 2v1 rounds (Si_Alliance locked alliance: allies won together, or the lock was active at the end).
         /// false = not rated, logged as "unrated: 2v1". Independent of rate_three_way.</summary>
         [JsonProperty("rate_two_vs_one")] public bool RateTwoVsOne = true;
+        /// <summary>0.7.8: announce the commander-Elo win chance ("Sol 31% / Alien 69%") in chat at round start. false = only the
+        /// MelonLoader log has it (a predicted loss at the start discourages the FPS players); the matchup line with the
+        /// ratings is shown either way (AnnounceMatchup).</summary>
+        [JsonProperty("announce_win_chance")] public bool AnnounceWinChance = false;
 
         // ---- matchmaking objective ------------------------------------------
         /// <summary>Score = LevelWeight * mean(rating) - SpreadWeight * spread - tier cost - penalties + wait bonus. SpreadWeight 1.0 = one Elo point of spread costs one point.</summary>

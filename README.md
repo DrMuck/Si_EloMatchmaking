@@ -22,8 +22,14 @@ against the default branch, git branch `test` against the test branch (see Build
   and the team balance work in those rounds as always (see Rating model).
 - **Leaver rule.** A commander who disconnects, resigns or changes team within `LateLeaveSeconds`
   (10 min) of the end of a round their team lost is charged as if they had stayed to the end.
-- **Chat display.** Applicants with rating during the countdown, the matchup with win chances at
-  round start, team mean player Elo at round start, rating changes at round end.
+- **Chat display.** Applicants with rating during the countdown, the commander matchup with ratings
+  at round start, team mean player Elo at round start, rating changes at round end.
+- **No win chance in chat (0.7.8).** The commander-Elo win chance ("Sol 31% / Alien 69%") is no longer
+  announced at round start: a predicted loss discourages the FPS players of the underdog team. It is
+  written to the MelonLoader log only (`[Elo] Win chance by commander Elo: Sol 31% / Alien 69% (log only,
+  announce_win_chance=false)`). Config `announce_win_chance` (default **false**), admin `!elo winchance on|off`
+  and the ModUI switch row "Announce win chance" put it back in chat. The "? = provisional" legend moves to
+  the matchup line while the win chance is not announced.
 - **Tier by player count (0.5.0).** On a small server anyone commands; from 10 players the pick
   aims at mid-or-high rated commanders, from 20 at high rated ones (`TierByPlayers`, admin
   `!elo tiers`). The tier is a cost, never a filter: a seat is always filled when anyone applied,
@@ -326,6 +332,7 @@ Then copy `data\ratings.json` to `UserData\cfg\EloMatchmaking\` and `!elo reload
 | `!elo tier <tier>` / `!elo tier auto` | admin | force the tier of the next pick / back to vote + player count |
 | `!elo balance on|off` | admin | team balance master switch |
 | `!elo rate3way on\|off` / `!elo rate2v1 on\|off` | admin | rate 3-way rounds (`rate_three_way`, default off) / Si_Alliance locked 2v1 rounds (`rate_two_vs_one`, default on); persisted in the config, shown in `!elo status` and the ModUI page (0.7.7) |
+| `!elo winchance on\|off` | admin | announce the commander-Elo win chance in chat at round start (`announce_win_chance`, default off = log only); persisted in the config, reply to the admin only, state in the admin's `!elo status` and the ModUI switch row (0.7.8) |
 | `!elo tiers 0=any,10=midhigh,20=high` | admin | the tier-by-player-count table (persisted in the config) |
 | `!elo seat <sol\|cent\|alien> <player>` | admin | pin this player as commander of that faction for the next round, ahead of the Elo pick (organised matches); `!elo seat` lists the pins |
 | `!elo unseat <faction>` / `!elo unseat all` | admin | drop a pin |

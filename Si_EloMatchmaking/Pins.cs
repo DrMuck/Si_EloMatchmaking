@@ -214,6 +214,7 @@ namespace Si_EloMatchmaking
                  .OnOff("/elo volunteers", "Flex volunteers", "May !flex volunteers fill a seat nobody applied for?", admin: true, on: Cfg.AllowVolunteers)
                  .OnOff("/elo rate3way", "Rate 3-way rounds", "ON: 3-way rounds (Humans vs Humans vs Aliens) change commander and player Elo. OFF: such rounds are not rated; matchmaking and team balance still use Elo.", admin: true, on: Cfg.RateThreeWay)
                  .OnOff("/elo rate2v1", "Rate 2v1 rounds", "ON: rounds with a locked Si_Alliance alliance (2v1) are rated, the allies win or lose together. OFF: such rounds are not rated.", admin: true, on: Cfg.RateTwoVsOne)
+                 .OnOff("/elo winchance", "Announce win chance", "ON: the commander-Elo win chance (e.g. Sol 31% / Alien 69%) is announced in chat at round start. OFF: it is only written to the server log; a predicted loss discourages the FPS players.", admin: true, on: Cfg.AnnounceWinChance)
                  .OnOff("/elo balance", "Team balance", "Elo-aware placement of fresh joiners at round start, the volunteer ask and !reserve. OFF hands the joins back to the game.", admin: true, on: Cfg.BalanceEnabled)
                  .Value("/elo spread", "Spread weight", "Cost per Elo point of rating gap between the seated commanders (1.0 = even matchups first).", admin: true, current: Cfg.SpreadWeight)
                  .Value("/elo level", "Level weight", "Weight of the mean rating: 0.3 = mild preference for strong commanders, 1.0 = level first.", admin: true, current: Cfg.LevelWeight)
