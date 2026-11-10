@@ -8,7 +8,8 @@
    in-game Commander button (vanilla lottery) and Si_CommManagement's !commander list. It
    seats the assignment that maximises rating level minus rating spread, may move a Sol
    applicant to Centauri (or vice versa) and may use !flex volunteers for an empty Alien seat.
- - Shows the matchup with ratings and win chances in chat, and the rating changes at the end.
+ - Shows the commander matchup with ratings in chat, and the rating changes at the end. The Elo win chance is only
+   logged (0.7.8: announce_win_chance, default off, puts it back in chat).
  - Admin pins (!elo seat <faction> <player>) fix a seat for the next round ahead of the pick
    (organised matches); Pins.cs. Pins.cs also exports the sub-commands to Si_ModUI.
  - Rotation and tiers (Tiers.cs): the pick aims at a rating tier chosen by player count (small
@@ -30,6 +31,7 @@
    winner as a win against every non-winner; the allies are not rated against each other.
    Since 0.7.7 3-way rounds (3 active teams) are not rated unless rate_three_way is on (default off), 2v1 rounds
    (Si_Alliance locked alliance) follow rate_two_vs_one (default on); the pick and the team balance are unchanged.
+   Since 0.7.8 the round-start win chance is logged only; announce_win_chance (default off) puts it back in chat.
 
  How it hooks the game (0.9.47 and 1.0.2, Mono server)
  - Postfix on MP_Strategy.OnMissionStateChanged(STARTED) with Priority.High: runs before
@@ -57,7 +59,7 @@ namespace Si_EloMatchmaking
 {
     public partial class EloMod : MelonMod
     {
-        public const string Version = "0.7.7";
+        public const string Version = "0.7.8";
         public static EloConfig Cfg = new EloConfig();
         public static RatingDb Db = null!;
         static readonly System.Random Rng = new System.Random();
@@ -345,6 +347,7 @@ namespace Si_EloMatchmaking
             var parts = new List<string>();
             var ratings = new List<double>();
             var ratedSeats = new List<Seat>();
+            bool anyProvisional = false;
             foreach (var seat in seats)
             {
                 var s = seated.FirstOrDefault(x => x.seat == seat);
@@ -357,15 +360,27 @@ namespace Si_EloMatchmaking
                 parts.Add(GameApi.Colored(seat.Team, $"{GameApi.Short(seat.Faction)}: {s.cand.Name} {Db.FormatShort(s.cand.Steam)}") + tag);
                 ratings.Add(s.cand.Rating);
                 ratedSeats.Add(seat);
+                var e = Db.Commander(s.cand.Steam);
+                if (e == null || e.games < Cfg.ProvisionalGames) anyProvisional = true;
             }
-            GameApi.SayAll("Commander matchup" + (tierName != "any" ? $" [{TierLabel(tierName)} tier, {tierReason}]" : "") + ": " + string.Join(" vs ", parts));
+            bool sayOdds = Cfg.AnnounceWinChance && ratings.Count >= 2;
+            GameApi.SayAll("Commander matchup" + (tierName != "any" ? $" [{TierLabel(tierName)} tier, {tierReason}]" : "") + ": " + string.Join(" vs ", parts)
+                           + (!sayOdds && anyProvisional ? " | ? = provisional (<" + Cfg.ProvisionalGames + " games)" : ""));
             if (ratings.Count >= 2)
             {
+                // 0.7.8: a win chance at the round start discourages the FPS players of the underdog team; it goes to the
+                // log only, to chat only with announce_win_chance (default off).
                 var p = RatingDb.WinProbabilities(ratings);
                 var odds = new List<string>();
+                var oddsLog = new List<string>();
                 for (int i = 0; i < ratedSeats.Count; i++)
+                {
                     odds.Add(GameApi.Colored(ratedSeats[i].Team, $"{GameApi.Short(ratedSeats[i].Faction)} {p[i] * 100:0}%"));
-                GameApi.SayAll("Win chance by commander Elo: " + string.Join(" / ", odds) + " | ? = provisional (<" + Cfg.ProvisionalGames + " games)");
+                    oddsLog.Add($"{GameApi.Short(ratedSeats[i].Faction)} {p[i] * 100:0}%");
+                }
+                MelonLogger.Msg("[Elo] Win chance by commander Elo: " + string.Join(" / ", oddsLog) + (sayOdds ? " (announced)" : " (log only, announce_win_chance=false)"));
+                if (sayOdds)
+                    GameApi.SayAll("Win chance by commander Elo: " + string.Join(" / ", odds) + " | ? = provisional (<" + Cfg.ProvisionalGames + " games)");
             }
         }
 
